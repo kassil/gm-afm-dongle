@@ -29,6 +29,7 @@ This tool relies on the following:
 
 *   **`python-can`**: The primary library for CAN communication in Python.
     *   Installation: `pip install python-can`
+    *   Some source suggest install `python-can` wwith the `neovi` extras: `pip install python-can[neovi]`
 *   **`click`**: A library for creating beautiful command-line interfaces.
     *   Installation: `pip install click`
 
