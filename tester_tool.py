@@ -1,4 +1,6 @@
 #!/home/kevin/.local/share/pipx/venvs/tat-cli/bin/python
+from listener import SummaryListener
+
 import can
 import time
 import sys
@@ -28,20 +30,6 @@ TESTER_PRESENT_INTERVAL = 2.0
 # Global variables for the bus and notifier to ensure proper cleanup
 bus = None
 notifier = None
-
-# --- Custom CAN Listener for printing received messages ---
-class SummaryListener(can.Listener):
-    """
-    A simple listener that prints a one-line summary of received CAN messages.
-    """
-    def on_message_received(self, msg: can.Message) -> None:
-        """
-        Callback function for received messages.
-        Prints a formatted one-line summary.
-        """
-        # Format: --> RX: ARB_ID [DLC] DATA_BYTES (e.g., --> RX: 7E8 [8] 01 02 03 04 05 06 07 08)
-        data_str = ' '.join(f'{b:02X}' for b in msg.data)
-        click.echo(f"--> RX: {msg.arbitration_id:03X} [{msg.dlc}] {data_str}")
 
 # --- UDS Message Sending Helper ---
 def send_uds_message(bus_obj: can.Bus, arb_id: int, data_bytes: list, description: str = ""):
@@ -115,10 +103,31 @@ def main(config_path: str | None, debug: bool):
         # 4. Loop on Tester Present command indefinitely
         click.echo(f"\n--- Looping Tester Present (3E 00) every {TESTER_PRESENT_INTERVAL}s ---", err=True)
         click.echo("Press Ctrl+C to stop.", err=True)
+
+        # Periodic data polling loop
+        PIDS_TO_POLL = [
+            (0x01, 0x0C, "Engine RPM"),
+            (0x01, 0x0D, "Vehicle Speed"),
+            (0x01, 0x0B, "Intake MAP"),
+            (0x01, 0x04, "Engine Load"),
+        ]
+
         while True:
-            send_uds_message(bus, REQUEST_ID, [TESTER_PRESENT_SID, TESTER_PRESENT_SUBFUNCTION],
-                             "Tester Present")
+            # Send tester present
+            send_uds_message(bus, REQUEST_ID, [TESTER_PRESENT_SID, TESTER_PRESENT_SUBFUNCTION], "Tester Present")
+            # Send standard OBD-II PID requests
+            for sid, pid, name in PIDS_TO_POLL:
+                msg = can.Message(
+                    arbitration_id=REQUEST_ID,
+                    data=[0x02, sid, pid],
+                    is_extended_id=False
+                )
+                data_str = ' '.join(f'{b:02X}' for b in msg.data)
+                click.echo(f"<-- TX: {name}: {msg.arbitration_id:03X} [{msg.dlc}] {data_str}", err=True)
+                bus.send(msg)
+                time.sleep(0.05)  # Small gap between requests
             time.sleep(TESTER_PRESENT_INTERVAL)
+
 
     except FileNotFoundError as e:
         click.echo(f"Configuration Error: {e}", err=True)
