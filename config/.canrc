@@ -1,0 +1,9 @@
+[default]
+interface = neovi
+serial = V27840
+channel = 1
+baudrate = 500000
+
+[HS3]
+channel = 1
+
