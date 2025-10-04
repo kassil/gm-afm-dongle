@@ -1,5 +1,6 @@
 #!/home/kevin/.local/share/pipx/venvs/tat-cli/bin/python
-from listener import SummaryListener
+from my_uds import SummaryListener
+import my_uds
 
 import can
 import time
@@ -44,7 +45,7 @@ def send_uds_message(bus_obj: can.Bus, arb_id: int, data_bytes: list, descriptio
                       is_extended_id=False) # Standard 11-bit CAN ID
 
     data_str = ' '.join(f'{b:02X}' for b in msg.data)
-    click.echo(f"<-- TX: {description}: {msg.arbitration_id:03X} [{msg.dlc}] {data_str}", err=True)
+    click.echo(f"<-- Tx {description}: {msg.arbitration_id:03X} [{msg.dlc}] {data_str}", err=True)
     bus_obj.send(msg)
 
 # --- Main CLI Command using click ---
@@ -105,25 +106,42 @@ def main(config_path: str | None, debug: bool):
         click.echo("Press Ctrl+C to stop.", err=True)
 
         # Periodic data polling loop
-        PIDS_TO_POLL = [
-            (0x01, 0x0C, "Engine RPM"),
-            (0x01, 0x0D, "Vehicle Speed"),
-            (0x01, 0x0B, "Intake MAP"),
-            (0x01, 0x04, "Engine Load"),
+        IDS_TO_POLL = [
+            (0x01, 0x0C), # "Engine RPM"),
+            (0x01, 0x0D), # "Vehicle Speed"),
+            (0x01, 0x0B), # "Intake MAP"),
+            (0x01, 0x04), # "Engine Load"),
+            (0x01, 0x05), # "Coolant Temp"),
+            (0x01, 0x0F), # "Intake Air Temp"),
+            (0x01, 0x10), # "MAF Air Flow"),
+            (0x01, 0x11), # "Throttle Position"),
+            (0x01, 0x06), # "Short Term Fuel Trim B1"),
+            (0x01, 0x07), # "Long Term Fuel Trim B1"),
+            (0x01, 0x46), # "Ambient Air Temp"),
+            (0x01, 0x33), # "Barometric Pressure"),
+            # Optional GM DIDs (if supported)
+            (0x22, 0xF40C), # "GM Engine Load (Alt)"),
+            (0x22, 0xF41F), # "GM AFM Active"),
         ]
-
         while True:
             # Send tester present
             send_uds_message(bus, REQUEST_ID, [TESTER_PRESENT_SID, TESTER_PRESENT_SUBFUNCTION], "Tester Present")
             # Send standard OBD-II PID requests
-            for sid, pid, name in PIDS_TO_POLL:
+            for sid, pid in IDS_TO_POLL:
+                if pid <= 0xFF:
+                    # Standard OBD-II PID (8-bit)
+                    data = [0x02, sid, pid]
+                else:
+                    # Extended 16-bit DID (e.g., GM-specific Mode 0x22)
+                    data = [0x03, sid, (pid >> 8) & 0xFF, pid & 0xFF]
+                name = my_uds.DID_NAMES[pid] if sid==0x22 else my_uds.PID_NAMES[pid]
                 msg = can.Message(
                     arbitration_id=REQUEST_ID,
-                    data=[0x02, sid, pid],
+                    data=data,
                     is_extended_id=False
                 )
                 data_str = ' '.join(f'{b:02X}' for b in msg.data)
-                click.echo(f"<-- TX: {name}: {msg.arbitration_id:03X} [{msg.dlc}] {data_str}", err=True)
+                click.echo(f"<-- Tx {name}: {msg.arbitration_id:03X} [{msg.dlc}] {data_str}", err=True)
                 bus.send(msg)
                 time.sleep(0.05)  # Small gap between requests
             time.sleep(TESTER_PRESENT_INTERVAL)
