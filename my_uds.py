@@ -119,7 +119,6 @@ def decode_did(did, payload):
 # --- Human-friendly CAN frame decoder for GMT900 Tahoe ---
 def decode_frame(msg):
     """Interpret UDS or OBD-II response frames from ECM (0x7E8) or TCM (0x7E9)."""
-    arb_id = msg.arbitration_id
     data = list(msg.data)
     if not data:
         return None
@@ -147,7 +146,7 @@ def decode_frame(msg):
             return f"DID 0x{did:04X} -> {payload}"
 
     else:
-        return f"Raw {data}"
+        return "Raw " + " ".join(f"{b:02X}" for b in data)
 
 def decode_ecu(arb_id) -> str:
     return {
@@ -163,7 +162,9 @@ class SummaryListener(can.Listener):
     into human-friendly text.
     """
     def on_message_received(self, msg: can.Message) -> None:
-        click.echo('receive')
+        if msg.arbitration_id & 0x08 == 0:
+            # Requests silent
+            return
         decoded = decode_frame(msg)
         ecu_name = decode_ecu(msg.arbitration_id)
         if decoded:
