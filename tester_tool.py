@@ -1,3 +1,4 @@
+#!/home/kevin/.local/share/pipx/venvs/tat-cli/bin/python
 import can
 import time
 import sys
