@@ -108,6 +108,7 @@ ECU_NAMES = {
 
     # Non-diagnostic broadcast frames seen on GM CAN
     # Common runtime broadcast frames (Powertrain / Chassis / Body)
+    0x0C9: "SDM", #SDM (Airbag Module)
     0x0F9: "BCM / Gateway Keepalive",
     0x199: "ECM Torque / Throttle Position",
     0x19D: "ECM Accelerator Pedal / Torque Request",
@@ -168,8 +169,20 @@ def decode_did(did, payload):
 
 # --- Human-friendly CAN frame decoder for GMT900 Tahoe ---
 def decode_frame(msg):
+
+    if msg.arbitration_id in ARB_DECODERS:
+        return ARB_DECODERS[msg.arbitration_id](msg.data)
+    return "Raw " + " ".join(f"{b:02X}" for b in msg.data)
+
+def decode_ecu(arb_id) -> str:
+    # Direction: 0x08 bit toggles request vs. response
+    dir = '<--' if (arb_id & 0x08) else '-->'
+    # Normalize the ID for lookup (clear bit 3)
+    ecu = ECU_NAMES.get(arb_id & 0xFFF7, ECU_NAMES.get(arb_id | 0x08, f"{arb_id:03X}")) # Unknown ECU
+    return f"{dir} {ecu}"
+
+def decode_7E8_7E9(data: bytes) -> str:
     """Interpret UDS or OBD-II response frames from ECM (0x7E8) or TCM (0x7E9)."""
-    data = list(msg.data)
     if not data:
         return None
 
@@ -195,15 +208,34 @@ def decode_frame(msg):
         else:
             return f"DID 0x{did:04X} -> {payload}"
 
-    else:
-        return "Raw " + " ".join(f"{b:02X}" for b in data)
+def decode_0C9(data: bytes) -> str:
+    """Decode GM SDM (Airbag / Accel sensor) frame 0x0C9."""
+    if len(data) < 7:
+        return "Invalid SDM frame length"
 
-def decode_ecu(arb_id) -> str:
-    # Direction: 0x08 bit toggles request vs. response
-    dir = '<--' if (arb_id & 0x08) else '-->'
-    # Normalize the ID for lookup (clear bit 3)
-    ecu = ECU_NAMES.get(arb_id & 0xFFF7, ECU_NAMES.get(arb_id | 0x08, f"{arb_id:03X}")) # Unknown ECU
-    return f"{dir} {ecu}"
+    long_accel = int.from_bytes(data[0:2], 'big', signed=True) * 0.01  # m/s²
+    lat_accel  = int.from_bytes(data[2:4], 'big', signed=True) * 0.01
+    yaw_rate   = int.from_bytes(data[4:5], 'big', signed=True) * 1.5   # °/s
+    status     = data[5]
+    counter    = data[6]
+
+    ignition_on = bool(status & 0x40)
+    crash_flag  = bool(status & 0x08)
+
+    return (f"Longitudinal={long_accel:+.2f} m/s², "
+            f"Lateral={lat_accel:+.2f} m/s², "
+            f"Yaw={yaw_rate:+.1f}°/s, "
+            f"Ignition={'On' if ignition_on else 'Off'}, "
+            f"Crash={'Yes' if crash_flag else 'No'}, "
+            f"Counter={counter}")
+
+
+ARB_DECODERS = {
+    0x0C9: decode_0C9,
+    0x7E8: decode_7E8_7E9,
+    0x7E9: decode_7E8_7E9,
+}
+
 
 class SummaryListener(can.Listener):
     """
