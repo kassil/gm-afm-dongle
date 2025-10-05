@@ -1,117 +1,92 @@
-# liveview.py
 import curses
+import random
 import time
-from enum import Enum
 
-class Mode(Enum):
-    VIEW = 0
-    CONFIG = 1
+# ------------------ DATA DEFINITIONS ------------------
 
-class LiveViewer:
-    def __init__(self, stdscr):
-        self.stdscr = stdscr
-        self.mode = Mode.VIEW
-        self.cursor = 0
+def decode_temp(msg):
+    return f"{20 + (msg[0] % 80):.1f} °C"
 
-        # Example table of possible IDs
-        self.did_table = [
-            {"ecu": "7E0", "label": "RPM",        "desc": "Engine speed"},
-            {"ecu": "7E0", "label": "CoolantTemp","desc": "Engine coolant temp"},
-            {"ecu": "7E0", "label": "ThrottlePos","desc": "Throttle position"},
-            {"ecu": "7E1", "label": "TransTemp",  "desc": "Transmission temp"},
-        ]
+def decode_percent(msg):
+    return f"{(msg[0] % 100):.1f} %"
 
-        # Initially active (tuples of arb_id, sid, pid)
-        self.active_ids = [
-            (0x7E0, 0x01, 0x0C),
-            (0x7E0, 0x01, 0x05)
-        ]
+def decode_rpm(msg):
+    val = (msg[0] << 8) | msg[1]
+    return f"{val % 8000} rpm"
 
-        # Placeholder values — later replaced by CAN polling
-        self.data_values = { (r["ecu"], r["label"]): "—" for r in self.did_table }
+# master_list: (ecu_id, sid, pid, label, description, decode_fn, enabled)
+master_list = [
+    (0x7E0, 0x01, 0x0C, "Engine RPM", "Engine speed in revolutions per minute", decode_rpm, True),
+    (0x7E0, 0x01, 0x05, "Coolant Temp", "Engine coolant temperature", decode_temp, True),
+    (0x7E8, 0x22, 0x1234, "Oil Pressure", "Measured oil pressure", decode_percent, False),
+    (0x7E8, 0x22, 0x1235, "Throttle", "Throttle position", decode_percent, True),
+]
 
-    def run(self):
-        curses.curs_set(0)
-        self.stdscr.nodelay(True)
-        while True:
-            self.draw()
-            self.handle_input()
-            if self.mode == Mode.VIEW:
-                self.poll_data()
-            time.sleep(0.2)
+# ------------------ RENDERING FUNCTIONS ------------------
 
-    def draw(self):
-        self.stdscr.erase()
-        h, w = self.stdscr.getmaxyx()
-        title = f"[{self.mode.name}]  c:configure, q:quit"
-        self.stdscr.addstr(0, 0, title)
+def render_view(stdscr):
+    stdscr.clear()
+    stdscr.addstr(0, 0, "VIEW MODE  (press 'c' to configure, 'q' to quit)")
+    row = 2
+    for ecu, sid, pid, label, desc, fn, enabled in master_list:
+        if not enabled:
+            continue
+        msg = bytes([random.randint(0, 255) for _ in range(2)])
+        val = fn(msg)
+        stdscr.addstr(row, 0, f"{ecu:04X}  SID:{sid:02X} PID:{pid:04X}  {label:12} {val}")
+        row += 1
+    stdscr.refresh()
 
-        for i, row in enumerate(self.did_table):
-            y = i + 2
-            if y >= h - 1:
-                break
-
-            ecu = row["ecu"].ljust(6)
-            label = row["label"].ljust(12)
-            key = (row["ecu"], row["label"])
-            if self.mode == Mode.VIEW:
-                value = str(self.data_values.get(key, "")).rjust(10)
-            else:
-                # configuration mode: show description + [x]/[ ]
-                active = self.is_active(row)
-                mark = "[x]" if active else "[ ]"
-                value = f"{mark} {row['desc']}"
-            line = f"{ecu} {label} {value}"
-            if i == self.cursor:
-                self.stdscr.attron(curses.A_REVERSE)
-                self.stdscr.addstr(y, 0, line[:w-1])
-                self.stdscr.attroff(curses.A_REVERSE)
-            else:
-                self.stdscr.addstr(y, 0, line[:w-1])
-        self.stdscr.refresh()
-
-    def handle_input(self):
-        try:
-            ch = self.stdscr.getkey()
-        except Exception:
-            return
-        if ch in ('q', 'Q'):
-            raise SystemExit
-        elif ch in ('c', 'C'):
-            self.mode = Mode.CONFIG if self.mode == Mode.VIEW else Mode.VIEW
-        elif ch in ('KEY_UP', 'k'):
-            self.cursor = max(0, self.cursor - 1)
-        elif ch in ('KEY_DOWN', 'j'):
-            self.cursor = min(len(self.did_table) - 1, self.cursor + 1)
-        elif self.mode == Mode.CONFIG and ch == ' ':
-            self.toggle_active(self.did_table[self.cursor])
-
-    def toggle_active(self, row):
-        ecu = int(row["ecu"], 16)
-        sid = 0x01
-        pid = 0x0C  # placeholder; in real use each row stores its own PID
-        tup = (ecu, sid, pid)
-        if tup in self.active_ids:
-            self.active_ids.remove(tup)
+def render_configure(stdscr, selected):
+    stdscr.clear()
+    stdscr.addstr(0, 0, "CONFIGURE MODE  (↑↓ or j/k move, space=toggle, v=view, q=quit)")
+    row = 2
+    for i, (ecu, sid, pid, label, desc, fn, enabled) in enumerate(master_list):
+        mark = "[X]" if enabled else "[ ]"
+        line = f"{mark} {ecu:04X} SID:{sid:02X} PID:{pid:04X}  {label:12}  {desc}"
+        if i == selected:
+            stdscr.attron(curses.A_REVERSE)
+            stdscr.addstr(row, 0, line)
+            stdscr.attroff(curses.A_REVERSE)
         else:
-            self.active_ids.append(tup)
+            stdscr.addstr(row, 0, line)
+        row += 1
+    stdscr.refresh()
 
-    def is_active(self, row):
-        ecu = int(row["ecu"], 16)
-        return any(a[0] == ecu for a in self.active_ids)
+# ------------------ MAIN LOOP ------------------
 
-    def poll_data(self):
-        # Placeholder: simulate data changing
-        for key in self.data_values:
-            if "RPM" in key[1]:
-                self.data_values[key] = f"{int(time.time()*10)%4000} rpm"
-            elif "Temp" in key[1]:
-                self.data_values[key] = f"{80 + int(time.time())%20} °C"
-            elif "Throttle" in key[1]:
-                self.data_values[key] = f"{int(time.time()*7)%100}%"
+def main(stdscr):
+    curses.curs_set(0)
+    stdscr.nodelay(False)
+    mode_configure = False
+    selected = 0
 
-def main():
-    curses.wrapper(LiveViewer)
+    while True:
+        if not mode_configure:
+            render_view(stdscr)
+            key = stdscr.getch()
+            if key == ord('q'):
+                break
+            elif key == ord('c'):
+                mode_configure = True
+            else:
+                time.sleep(0.2)
+        else:
+            render_configure(stdscr, selected)
+            key = stdscr.getch()
+            if key == ord('q'):
+                break
+            elif key in (curses.KEY_UP, ord('k')):
+                selected = (selected - 1) % len(master_list)
+            elif key in (curses.KEY_DOWN, ord('j')):
+                selected = (selected + 1) % len(master_list)
+            elif key == ord(' '):
+                ecu, sid, pid, label, desc, fn, enabled = master_list[selected]
+                master_list[selected] = (ecu, sid, pid, label, desc, fn, not enabled)
+            elif key == ord('v'):
+                mode_configure = False
+
+# ------------------ RUN ------------------
 
 if __name__ == "__main__":
-    curses.wrapper(lambda stdscr: LiveViewer(stdscr).run())
+    curses.wrapper(main)
