@@ -6,7 +6,7 @@ import struct
 import sys
 import time
 import traceback
-from typing import Callable, List, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 CanMsgData = Union[bytes, bytearray] # can.Message.data
 
@@ -345,6 +345,86 @@ ARB_DECODERS = {
     0x7E8: decode_7E8_7E9,
     0x7E9: decode_7E8_7E9,
 }
+
+def framing(msg: can.Message, on_mode1, on_mode22) -> str:
+    """Interpret UDS or OBD-II response frames from ECM (0x7E8) or TCM (0x7E9)."""
+    data = msg.data
+
+    if not data:
+        return 'frm_empty'  # No bytes received!
+
+    # A single-frame response must have at least 3 bytes:
+    # [report_size] [Service ID] [PID/DID_MSB]
+    if len(data) < 3:
+        return f"frm_too_short [{len(data)}]: {_format_raw_data(data)}"
+
+    report_size = data[0]
+    service_id = data[1]
+
+    # Check if the actual message length matches the reported size
+    # report_size specifies the number of bytes *after* itself.
+    # So, actual_expected_len = report_size + 1
+    if len(data) != (report_size + 1):
+        return f'frm_mismatch report:{report_size:02X} act:{len(data)} {_format_raw_data(data)}'
+
+    # --- Response to Mode 0x01 (0x41) ---
+    if service_id == 0x41:
+        # Expected format: [report_size] [0x41] [PID] [Data...]
+        # Minimum bytes for a valid 0x41 response: report_size=0x02 (for 0x41+PID) + 1 data byte = 0x03
+        if report_size < 0x03:
+             return f'frm_malformed_01: report_size too small ({report_size:02X}) {_format_raw_data(data)}'
+
+        pid = data[2]
+        # Payload bytes are from data[3] onwards
+        # Number of actual data bytes for the PID = report_size - 1 (for 0x41) - 1 (for PID)
+        pid_data_length = report_size - 2
+
+        if len(data) < (3 + pid_data_length): # Check if enough bytes for the PID data
+            return f'frm_malformed_01: not enough data for PID {pid:02X} {_format_raw_data(data)}'
+
+        payload_bytes = data[3 : 3 + pid_data_length]
+        #value_int = _get_value_from_bytes(payload_bytes)
+        v = search_id_list(msg.arbitration_id & 0xFFF7, pid, PID_LIST)
+        if v:
+            (name, desc, decode_fn) = v
+            value_str = decode_fn(payload_bytes)
+            on_mode1(msg.arbitration_id, pid, name, desc, value_str)
+            return f"{name}: {value_str}"
+        else:
+            # Unknown ECU, PID combination
+            return f"{msg.arbitration_id:04X} PID {pid:04X} Raw Data: {_format_raw_data(payload_bytes)}"
+
+    # --- Response to Mode 0x22 (UDS Read Data By Identifier - 0x62) ---
+    elif service_id == 0x62:
+        # Expected format: [report_size] [0x62] [DID_MSB] [DID_LSB] [Data...]
+        # Minimum bytes for a valid 0x62 response: report_size=0x03 (for 0x62+DID_MSB+DID_LSB) + 1 data byte = 0x04
+        if report_size < 0x03: # 0x03 means 0x62 + DID_MSB + DID_LSB, no data
+            return f'frm_malformed_22: report_size too small ({report_size:02X}) {_format_raw_data(data)}'
+
+        did = (data[2] << 8) | data[3] # Assemble 16-bit DID
+
+        # Payload bytes are from data[4] onwards
+        # Number of actual data bytes for the DID = report_size - 1 (for 0x62) - 2 (for DID)
+        did_data_length = report_size - 3
+
+        if len(data) < (4 + did_data_length): # Check if enough bytes for the DID data
+            return f'frm_malformed_22: not enough data for DID {did:04X} {_format_raw_data(data)}'
+
+        payload_bytes = data[4 : 4 + did_data_length]
+        #value_int = _get_value_from_bytes(payload_bytes) # This might return bytes if length isn't 1,2,4
+        v = search_id_list(msg.arbitration_id & 0xFFF7, pid, PID_LIST)
+        if v:
+            (name, desc, decode_fn) = v
+            value_str = decode_fn(payload_bytes)
+            on_mode1(msg.arbitration_id, pid, name, desc, value_str)
+            return f"{name}: {value_str}"
+        else:
+            # Unknown ECU, DID combination
+            return f"{msg.arbitration_id:04X} DID {did:04X} Raw Data: {_format_raw_data(payload_bytes)}"
+
+    # --- Unhandled Service ID ---
+    else:
+        return f'frm_unhandled_sid {service_id:02X} {_format_raw_data(data)}'
 
 
 class SummaryListener(can.Listener):
