@@ -139,7 +139,7 @@ def main(simulate: bool, config_path: str | None, debug: bool):
                 else:
                     # Extended 16-bit DID (e.g., GM-specific Mode 0x22)
                     data = [0x03, sid, (pid >> 8) & 0xFF, pid & 0xFF]
-                lookup = my_uds.search_list(arb_id, pid, my_uds.DID_LIST if sid==0x22 else my_uds.PID_LIST)
+                lookup = my_uds.search_id_list(arb_id, pid, my_uds.DID_LIST if sid==0x22 else my_uds.PID_LIST)
                 name = lookup[0]
                 msg = can.Message(
                     arbitration_id=arb_id,

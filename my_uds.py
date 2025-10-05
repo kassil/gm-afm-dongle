@@ -42,8 +42,28 @@ def decode_yes_no(data: CanMsgData) -> str:
         raise ValueError("Boolean field expects ≥1 byte payload")
     return "Yes" if data[0] else "No"
 
-# Call this to search for a PID or DID
-search_list = lambda arb_id, pid, id_list: next((v for k, v in id_list if k == (arb_id, pid)), None)
+def search_id_list(
+    arb_id: int,
+    identifier: int, # PID or DID
+    id_list: List[Tuple[Tuple[int, int], Tuple[str, str, Callable[[CanMsgData], Any]]]]
+) -> Optional[Tuple[str, str, Callable[[CanMsgData], Any]]]:
+    """
+    Searches a list of (arbitration_id, identifier) mappings for a match.
+
+    Args:
+        arb_id: The arbitration ID (e.g., ECU address).
+        identifier: The PID or DID to search for.
+        id_list: A list where each element is a tuple:
+                 ((arbitration_id, identifier), (name, description, decode_function))
+
+    Returns:
+        The (name, description, decode_function) tuple if a match is found,
+        otherwise None.
+    """
+    # Using next() and a generator expression, search for (arb_id, identifier)
+    search_key = (arb_id, identifier)
+    return next((v for k, v in id_list if k == search_key), None)
+
 
 # Mode 1 Parameter ID (PID)
 PID_LIST: List[Tuple[Tuple[int, int], Tuple[str, str, Callable[[CanMsgData], str]]]] = [
@@ -186,7 +206,7 @@ def decode_frame(msg: can.Message):
     #TODO Mask response bit 3?
     if msg.arbitration_id in ARB_DECODERS:
         return ARB_DECODERS[msg.arbitration_id](msg)
-    return "Raw " + " ".join(f"{b:02X}" for b in msg.data)
+    return "NoArbDecoder Raw " + " ".join(f"{b:02X}" for b in msg.data)
 
 def decode_ecu(arb_id: int) -> str:
     # Direction: 0x08 bit toggles request vs. response
@@ -197,47 +217,106 @@ def decode_ecu(arb_id: int) -> str:
     ecu = ECU_NAMES.get(req_id, ECU_NAMES.get(resp_id, f"{arb_id:03X}")) # Unknown ECU
     return f"{dir} {ecu}"
 
+def _format_raw_data(data: bytes) -> str:
+    """Helper to format raw byte data for error messages."""
+    return ' '.join(f'{b:02X}' for b in data)
+
+def _get_value_from_bytes(byte_array: bytes):
+    """
+    Converts a byte array into an integer if it's 1, 2, or 4 bytes long.
+    Otherwise, returns the byte array itself.
+    """
+    length = len(byte_array)
+    if length == 1:
+        return byte_array[0]
+    elif length == 2:
+        return (byte_array[0] << 8) | byte_array[1]
+    elif length == 4:
+        return (byte_array[0] << 24) | (byte_array[1] << 16) | \
+               (byte_array[2] << 8) | byte_array[3]
+    else:
+        # For variable length DIDs, it's often a string or complex structure
+        return byte_array
+
 def decode_7E8_7E9(msg: can.Message) -> str:
     """Interpret UDS or OBD-II response frames from ECM (0x7E8) or TCM (0x7E9)."""
     data = msg.data
+
     if not data:
-        return None
+        return 'frm_empty'  # No bytes received!
 
-    # TODO Check data[0] == len(data)
+    # A single-frame response must have at least 3 bytes:
+    # [report_size] [Service ID] [PID/DID_MSB]
+    if len(data) < 3:
+        return f"frm_too_short [{len(data)}]: {_format_raw_data(data)}"
 
-    # Response to Mode 0x01 (0x41)
-    if data[0] == 0x04 and data[1] == 0x41:
+    report_size = data[0]
+    service_id = data[1]
+
+    # Check if the actual message length matches the reported size
+    # report_size specifies the number of bytes *after* itself.
+    # So, actual_expected_len = report_size + 1
+    if len(data) != (report_size + 1):
+        return f'frm_mismatch report:{report_size:02X} act:{len(data)} {_format_raw_data(data)}'
+
+    # --- Response to Mode 0x01 (0x41) ---
+    if service_id == 0x41:
+        # Expected format: [report_size] [0x41] [PID] [Data...]
+        # Minimum bytes for a valid 0x41 response: report_size=0x02 (for 0x41+PID) + 1 data byte = 0x03
+        if report_size < 0x03:
+             return f'frm_malformed_01: report_size too small ({report_size:02X}) {_format_raw_data(data)}'
+
         pid = data[2]
-        # Assemble 16-bit integer
-        payload = data[3:]
-        value = (payload[0] << 8) | payload[1]  # Big-endian
-        k = (msg.arbitration_id, pid)
-        if k in PID_LIST:
-            (name, _, decode_fn) = PID_LIST[k]
-            value_str = decode_fn(value)
-            return f"{name}: {value}"
+        # Payload bytes are from data[3] onwards
+        # Number of actual data bytes for the PID = report_size - 1 (for 0x41) - 1 (for PID)
+        pid_data_length = report_size - 2
+
+        if len(data) < (3 + pid_data_length): # Check if enough bytes for the PID data
+            return f'frm_malformed_01: not enough data for PID {pid:02X} {_format_raw_data(data)}'
+
+        payload_bytes = data[3 : 3 + pid_data_length]
+        #value_int = _get_value_from_bytes(payload_bytes)
+        v = search_id_list(msg.arbitration_id & 0xFFF7, pid, PID_LIST)
+        if v:
+            (name, _, decode_fn) = v
+            #decoded_value = decode_fn(value_int)
+            decoded_value = decode_fn(payload_bytes)
+            return f"{name}: {decoded_value}"
         else:
             # Unknown ECU, PID combination
-            data_str = ' '.join(f'{b:02X}' for b in msg.data)
-            return f"PID {pid:04X} Raw {data_str}"
+            return f"{msg.arbitration_id:04X} PID {pid:04X} Raw Data: {_format_raw_data(payload_bytes)}"
 
-    # Response to Mode 0x22 (manufacturer-specific)
-    # UDS 0x22 Read Data By Identifier
-    elif data[0] >= 3 and data[1] == 0x62:
-        # Assemble 16-bit integer
-        payload = data[4:]
-        value = (payload[0] << 8) | payload[1]  # Big-endian
-        value = decode_did(did, payload)
-        did = (data[2] << 8) | data[3]  # Big-endian
-        k = (msg.arbitration_id, did)
-        if k in DID_LIST:
-            (name, _, decode_fn) = DID_LIST[k]
-            value_str = decode_fn(value)
-            return f"{name}: {value}"
+    # --- Response to Mode 0x22 (UDS Read Data By Identifier - 0x62) ---
+    elif service_id == 0x62:
+        # Expected format: [report_size] [0x62] [DID_MSB] [DID_LSB] [Data...]
+        # Minimum bytes for a valid 0x62 response: report_size=0x03 (for 0x62+DID_MSB+DID_LSB) + 1 data byte = 0x04
+        if report_size < 0x03: # 0x03 means 0x62 + DID_MSB + DID_LSB, no data
+            return f'frm_malformed_22: report_size too small ({report_size:02X}) {_format_raw_data(data)}'
+
+        did = (data[2] << 8) | data[3] # Assemble 16-bit DID
+
+        # Payload bytes are from data[4] onwards
+        # Number of actual data bytes for the DID = report_size - 1 (for 0x62) - 2 (for DID)
+        did_data_length = report_size - 3
+
+        if len(data) < (4 + did_data_length): # Check if enough bytes for the DID data
+            return f'frm_malformed_22: not enough data for DID {did:04X} {_format_raw_data(data)}'
+
+        payload_bytes = data[4 : 4 + did_data_length]
+        #value_int = _get_value_from_bytes(payload_bytes) # This might return bytes if length isn't 1,2,4
+        v = search_id_list(msg.arbitration_id & 0xFFF7, pid, PID_LIST)
+        if v:
+            (name, _, decode_fn) = v
+            #decoded_value = decode_fn(value_int)
+            decoded_value = decode_fn(payload_bytes)
+            return f"{name}: {decoded_value}"
         else:
             # Unknown ECU, DID combination
-            data_str = ' '.join(f'{b:02X}' for b in msg.data)
-            return f"DID {did:04X} Raw {data_str}"
+            return f"{msg.arbitration_id:04X} DID {did:04X} Raw Data: {_format_raw_data(payload_bytes)}"
+
+    # --- Unhandled Service ID ---
+    else:
+        return f'frm_unhandled_sid {service_id:02X} {_format_raw_data(data)}'
 
 def decode_0C9(msg) -> str:
     """Decode GM SDM (Airbag / Accel sensor) frame 0x0C9."""
@@ -283,7 +362,7 @@ class SummaryListener(can.Listener):
             click.echo(f"Rx {ecu_name} [{msg.dlc}] {decoded}")
         else:
             data_str = ' '.join(f'{b:02X}' for b in msg.data)
-            click.echo(f"Rx {ecu_name} [{msg.dlc}] {data_str}")
+            click.echo(f"Rx {ecu_name} [{msg.dlc}] {data_str} no_decode_ecu")
 
 def interpret_pid(pid: int, payload: bytes) -> str:
     """Decode standard OBD-II PIDs from Service 01 (0x41 responses)."""
