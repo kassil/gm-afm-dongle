@@ -12,7 +12,7 @@ import click # Make sure click is installed: pip install click
 # --- Configuration for UDS messages ---
 # UDS Request ID (physical addressing)
 # Common request ID for a single ECU. Response ID is usually Request_ID + 8.
-REQUEST_ID = 0x7E0
+ECU_REQ_ID = 0x7E0
 
 # UDS Service IDs and Sub-functions
 # Diagnostic Session Control (10)
@@ -43,9 +43,8 @@ def send_uds_message(bus_obj: can.Bus, arb_id: int, data_bytes: list, descriptio
     msg = can.Message(arbitration_id=arb_id,
                       data=uds_data,
                       is_extended_id=False) # Standard 11-bit CAN ID
-
     data_str = ' '.join(f'{b:02X}' for b in msg.data)
-    click.echo(f"    Tx {description}: {msg.arbitration_id:03X} [{msg.dlc}] {data_str}", err=True)
+    click.echo(f"Tx {my_uds.decode_ecu(arb_id)} {description}: [{msg.dlc}] {data_str}", err=True)
     bus_obj.send(msg)
 
 # --- Main CLI Command using click ---
@@ -97,7 +96,7 @@ def main(config_path: str | None, debug: bool):
 
         # 3. Send Diagnostic Session Control 10 03
         click.echo("\n--- Sending Diagnostic Session Control (10 03) ---", err=True)
-        send_uds_message(bus, REQUEST_ID, [SESSION_CONTROL_SID, EXTENDED_SESSION_SUBFUNCTION],
+        send_uds_message(bus, ECU_REQ_ID, [SESSION_CONTROL_SID, EXTENDED_SESSION_SUBFUNCTION],
                          "Diagnostic Session Control (Extended Session)")
         time.sleep(0.1) # Small delay for the bus to process
 
@@ -107,27 +106,27 @@ def main(config_path: str | None, debug: bool):
 
         # Periodic data polling loop
         IDS_TO_POLL = [
-            (0x01, 0x0C), # "Engine RPM"),
-            (0x01, 0x0D), # "Vehicle Speed"),
-            (0x01, 0x0B), # "Intake MAP"),
-            (0x01, 0x04), # "Engine Load"),
-            (0x01, 0x05), # "Coolant Temp"),
-            (0x01, 0x0F), # "Intake Air Temp"),
-            (0x01, 0x10), # "MAF Air Flow"),
-            (0x01, 0x11), # "Throttle Position"),
-            (0x01, 0x06), # "Short Term Fuel Trim B1"),
-            (0x01, 0x07), # "Long Term Fuel Trim B1"),
-            (0x01, 0x46), # "Ambient Air Temp"),
-            (0x01, 0x33), # "Barometric Pressure"),
+            (0x7E0, 0x01, 0x0C), # "Engine RPM"),
+            (0x7E0, 0x01, 0x0D), # "Vehicle Speed"),
+            (0x7E0, 0x01, 0x0B), # "Intake MAP"),
+            (0x7E0, 0x01, 0x04), # "Engine Load"),
+            (0x7E0, 0x01, 0x05), # "Coolant Temp"),
+            (0x7E0, 0x01, 0x0F), # "Intake Air Temp"),
+            (0x7E0, 0x01, 0x10), # "MAF Air Flow"),
+            (0x7E0, 0x01, 0x11), # "Throttle Position"),
+            (0x7E0, 0x01, 0x06), # "Short Term Fuel Trim B1"),
+            (0x7E0, 0x01, 0x07), # "Long Term Fuel Trim B1"),
+            (0x7E0, 0x01, 0x46), # "Ambient Air Temp"),
+            (0x7E0, 0x01, 0x33), # "Barometric Pressure"),
             # Optional GM DIDs (if supported)
-            (0x22, 0xF40C), # "GM Engine Load (Alt)"),
-            (0x22, 0xF41F), # "GM AFM Active"),
+            (0x7E0, 0x22, 0xF40C), # "GM Engine Load (Alt)"),
+            (0x7E0, 0x22, 0xF41F), # "GM AFM Active"),
         ]
         while True:
             # Send tester present
-            send_uds_message(bus, REQUEST_ID, [TESTER_PRESENT_SID, TESTER_PRESENT_SUBFUNCTION], "Tester Present")
+            send_uds_message(bus, ECU_REQ_ID, [TESTER_PRESENT_SID, TESTER_PRESENT_SUBFUNCTION], "Tester Present")
             # Send standard OBD-II PID requests
-            for sid, pid in IDS_TO_POLL:
+            for arb_id, sid, pid in IDS_TO_POLL:
                 if pid <= 0xFF:
                     # Standard OBD-II PID (8-bit)
                     data = [0x02, sid, pid]
@@ -136,12 +135,13 @@ def main(config_path: str | None, debug: bool):
                     data = [0x03, sid, (pid >> 8) & 0xFF, pid & 0xFF]
                 name = my_uds.DID_NAMES[pid] if sid==0x22 else my_uds.PID_NAMES[pid]
                 msg = can.Message(
-                    arbitration_id=REQUEST_ID,
+                    arbitration_id=arb_id,
                     data=data,
                     is_extended_id=False
                 )
                 data_str = ' '.join(f'{b:02X}' for b in msg.data)
-                click.echo(f"    Tx {name}: {msg.arbitration_id:03X} [{msg.dlc}] {data_str}", err=True)
+                ecu = my_uds.decode_ecu(arb_id)
+                click.echo(f"Tx {ecu} {name}: {msg.arbitration_id:03X} [{msg.dlc}] {data_str}", err=True)
                 bus.send(msg)
                 time.sleep(0.05)  # Small gap between requests
             time.sleep(TESTER_PRESENT_INTERVAL)
