@@ -36,8 +36,9 @@ def iter_all_signals() -> Iterator[Tuple[Tuple[int, int, int], Tuple[str, str, C
     for (ecu, did), info in my_uds.DID_LIST:
         yield ((ecu, 0x22, did), info)
 
-global master_list
+global master_list, value_cache
 master_list = list(iter_all_signals())
+value_cache = {}
 
 # ------------------ DRAW HELPERS ------------------
 
@@ -90,15 +91,15 @@ def render_view(stdscr, active_keys, scroll_offset):
     # This avoids building the full list in memory but still lets you scroll window
     visible_rows = list(islice(iter_all_signals(), scroll_offset, scroll_offset + n_visible))
     row_y = top + 1
-    for (can_id, sid, pid), (name, description, decode_fn) in visible_rows:
-        #(name, description, decode_fn, display_flag) = master_list[(can_id, sid, pid)]
+    for (can_id, sid, pid), (label, descr, decode_fn) in visible_rows:
+        #(label, descr, decode_fn, display_flag) = master_list[(can_id, sid, pid)]
         msg = bytes([random.randint(0, 255) for _ in range(2)])
-        val = '' #decode_fn(msg)
+        value = value_cache.get((can_id & 0xFFF7, sid, pid), 'loading')
         safe_addstr(
             stdscr,
             row_y,
             left + 2,
-            f"{can_id:6X} {sid:3X} {pid:04X} {name[:15]:15} {val[:15]:>15}"
+            f"{can_id:6X} {sid:3X} {pid:04X} {label[:15]:15} {value[:15]:>15}"
         )
         row_y += 1
 
@@ -312,7 +313,7 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
                     active_keys.add(rowkey)
                 draw_all = True
 
-        def on_didpid(arb_id, sid, pid, name, desc, value_str):#msg: can.Message):
+        def on_didpid(arb_id, sid, pid, label, desc, value):#msg: can.Message):
             h, w = stdscr.getmaxyx()
             top, bottom  = 1, h - 1
             left, right = 0, w - 2
@@ -324,13 +325,12 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
             #visible_rows = active_list[scroll_offset: scroll_offset + n_visible]
             visible_rows = list(islice(iter_all_signals(), scroll_offset, scroll_offset + n_visible))
             for i, entry in enumerate(visible_rows):
-                (e_can_id, e_sid, e_pid), (label, desc, fn) = entry
-                #safe_addstr(stdscr, top+1+i, 64, f"{i:02} {e_can_id:03X} {e_sid:04X} {e_pid:04X}")
+                (e_can_id, e_sid, e_pid), (_, _, _) = entry
                 if (arb_id & 0xFFF7, sid, pid) == (e_can_id & 0xFFF7, e_sid, e_pid):
-                    safe_addstr(stdscr, top+1+i, 40, value_str+f" {arb_id&0xFFF7:04X} {sid:04X} {pid:04X}")
+                    safe_addstr(stdscr, top+1+i, 42, f"{value[:15]:15}")
                     break
-            #safe_addstr(stdscr, 20, 40, f"no match {arb_id&0xFFF7:04X} {sid:04X} {pid:04X}")
-            #stdscr.addstr(f"Rx {ecu_name} [{msg.dlc}] {decoded}\n")
+            # Store it for rapid screen updates
+            value_cache[(arb_id & 0xFFF7, sid, pid)] = value
 
         # --- Process CAN Messages (from Queue) ---
         while not msg_queue.empty():
