@@ -108,7 +108,7 @@ class Bus:
     def __init__(self):
         #self.playback_file = playback_file
         #self.interval = interval
-        self.interval = 0.1
+        self.interval = 0.05
         playback_file = None
         self.running = False
         self._queue: queue.Queue[Message] = queue.Queue()
@@ -154,16 +154,18 @@ class Bus:
 
     def _loop(self):
         i = 0
+        if not self._frames:
+            all_pids = list(ONE_BYTE_PIDS | TWO_BYTE_PIDS | FOUR_BYTE_PIDS)
+            r = lambda: random.randint(0, 255)
+            arb_id = 0x7E8
         while self.running:
             if self._frames:
                 # Replay from log cyclically
                 msg = self._frames[i % len(self._frames)]
-                i += 1
             else:
                 # Random mode: generate Mode 1 PID-like messages
-                arb_id = 0x7E8
-                r = lambda: random.randint(0, 255)
-                pid = random.choice(list(ONE_BYTE_PIDS | TWO_BYTE_PIDS | FOUR_BYTE_PIDS))
+                #pid = random.choice(list(ONE_BYTE_PIDS | TWO_BYTE_PIDS | FOUR_BYTE_PIDS))
+                pid = all_pids[i % len(all_pids)]
                 if pid in ONE_BYTE_PIDS:
                     data = bytes([3, 0x41, pid, r()])
                 elif pid in TWO_BYTE_PIDS:
@@ -171,6 +173,7 @@ class Bus:
                 else:
                     data = bytes([6, 0x41, pid, r(), r(), r(), r()])
                 msg = Message(arb_id, data)
+            i += 1
             self._queue.put(msg)
             time.sleep(self.interval)
 
