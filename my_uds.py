@@ -87,8 +87,8 @@ PID_NAMES = {
 
 ECU_NAMES = {
     # Powertrain / standard UDS IDs
-    0x7E0: "ECM (Engine Control Module)",
-    0x7E1: "TCM (Transmission Control Module)",
+    0x7E0: "ECM", # Engine Control Module)",
+    0x7E1: "TCM", # (Transmission Control Module)",
     0x7E2: "ABS / EBCM (Brake Control)",
     0x7E3: "SRS / Airbag Module",
     0x7E4: "BCM (Body Control Module)",
@@ -107,14 +107,32 @@ ECU_NAMES = {
     0x776: "Gateway (alt address)",
 
     # Non-diagnostic broadcast frames seen on GM CAN
-    0x1CB: "BCM (Body Control Broadcast)",
-    0x1CD: "IPC (Cluster Data)",
-    0x1E9: "Powertrain Torque / Throttle Data",
-    0x1EB: "Cruise / Throttle Control",
-    0x1F1: "Engine Status / Sensor Data",
+    # Common runtime broadcast frames (Powertrain / Chassis / Body)
+    0x0F9: "BCM / Gateway Keepalive",
+    0x199: "ECM Torque / Throttle Position",
+    0x19D: "ECM Accelerator Pedal / Torque Request",
+    0x12A: "ECM Fuel / Airflow Data",
+    0x138: "ECM Lambda / AFR Sensor Data",
+    0x17D: "Transmission / Torque Converter Status",
+    0x17F: "Transmission / Gear Status",
+    0x1CB: "BCM / Lighting / Accessory Data",
+    0x1CD: "IPC (Cluster Display Data)",
+    0x1E9: "ECM Engine Data (RPM, Torque)",
+    0x1EB: "ECM Cruise / Idle Control",
+    0x1ED: "ECM Engine Load / Knock Info",
+    0x2F9: "ABS / Wheel Speed Data",
+    0x348: "Chassis Sensor Cluster",
+    0x34A: "Chassis / Yaw / Accel Data",
     0x3C9: "SDM (Airbag Module)",
-    0x524: "Steering / Chassis Module",
-    0x528: "Transfer Case / Differential",
+    0x3E9: "ECM Misc Sensor Data",
+    0x3F9: "ECM Sensor Fusion Data",
+    0x3FB: "ECM / Fuel Trim Info",
+    0x3FD: "IPC / Cluster Keepalive",
+    0x4C9: "ABS Brake Pressure Data",
+    0x4D9: "ABS / Yaw Sensor Data",
+    0x4E9: "Steering Angle / Column Sensor",
+    0x528: "Transfer Case / 4WD Control",
+    0x52A: "Suspension / Ride Height / Damping",
 }
 
 def decode_pid(pid, payload):
@@ -184,7 +202,7 @@ def decode_ecu(arb_id) -> str:
     # Direction: 0x08 bit toggles request vs. response
     dir = '<--' if (arb_id & 0x08) else '-->'
     # Normalize the ID for lookup (clear bit 3)
-    ecu = ECU_NAMES.get(arb_id & 0xFFF7, f"0x{arb_id:X}") # Unknown ECU
+    ecu = ECU_NAMES.get(arb_id & 0xFFF7, ECU_NAMES.get(arb_id | 0x08, f"{arb_id:03X}")) # Unknown ECU
     return f"{dir} {ecu}"
 
 class SummaryListener(can.Listener):
