@@ -1,10 +1,16 @@
+import my_uds
+
+import click
 import curses
+from itertools import islice
 import json
 from pathlib import Path
+import queue
 import random
 import sys
 import time
 import traceback
+from typing import Any, Iterator, Tuple, Callable#, List, Tuple, Union
 
 STATE_FILE = Path("active_ids.json")
 
@@ -20,18 +26,18 @@ def decode_rpm(msg: bytes) -> str:
     val = (msg[0] << 8) | msg[1]
     return f"{val % 8000} rpm"
 
-master_list = [
-    ((0x7E0, 0x01,   0x0C), ("Engine RPM", "Engine speed in revolutions per minute", decode_rpm)),
-    ((0x7E0, 0x01,   0x05), ("Coolant Temp", "Engine coolant temperature", decode_temp)),
-    ((0x7E8, 0x22, 0x1234), ("Oil Pressure", "Measured oil pressure", decode_percent)),
-    ((0x7E8, 0x22, 0x1235), ("Throttle", "Throttle position", decode_percent)),
-    ((0x7E8, 0x22, 0x1236), ("Battery Volt", "System voltage", decode_percent)),
-    ((0x7E8, 0x22, 0x1237), ("Fuel Level", "Fuel tank level", decode_percent)),
-    ((0x7E8, 0x22, 0x1238), ("Manifold Temp", "Air manifold temperature", decode_temp)),
-    ((0x7E8, 0x22, 0x1239), ("Oil Temp", "Engine oil temperature", decode_temp)),
-    ((0x7E8, 0x22, 0x1240), ("Torque", "Delivered engine torque", decode_percent)),
-    ((0x7E8, 0x22, 0x1241), ("MAP", "Manifold absolute pressure", decode_percent)),
-]
+def iter_all_signals() -> Iterator[Tuple[Tuple[int, int, int], Tuple[str, str, Callable[[my_uds.CanMsgData], str]]]]:
+    """Yield all PID and DID entries with the proper service ID inserted."""
+    # Mode 1 (Service 0x01) for OBD-II PIDs
+    for (ecu, pid), info in my_uds.PID_LIST:
+        yield ((ecu, 0x01, pid), info)
+
+    # Mode 22 (Service 0x22) for UDS Data Identifiers
+    for (ecu, did), info in my_uds.DID_LIST:
+        yield ((ecu, 0x22, did), info)
+
+global master_list
+master_list = list(iter_all_signals())
 
 # ------------------ DRAW HELPERS ------------------
 
@@ -80,12 +86,14 @@ def render_view(stdscr, active_keys, scroll_offset):
         (key, value) for key, value in master_list
         if key in active_keys
     ]
-    visible_list = active_list[scroll_offset: scroll_offset + n_visible]
+    #visible_rows = active_list[scroll_offset: scroll_offset + n_visible]
+    # This avoids building the full list in memory but still lets you scroll window
+    visible_rows = list(islice(iter_all_signals(), scroll_offset, scroll_offset + n_visible))
     row_y = top + 1
-    for (can_id, sid, pid), (name, description, decode_fn) in visible_list:
+    for (can_id, sid, pid), (name, description, decode_fn) in visible_rows:
         #(name, description, decode_fn, display_flag) = master_list[(can_id, sid, pid)]
         msg = bytes([random.randint(0, 255) for _ in range(2)])
-        val = decode_fn(msg)
+        val = '' #decode_fn(msg)
         safe_addstr(
             stdscr,
             row_y,
@@ -129,9 +137,101 @@ def render_configure(stdscr, active_keys, selected, scroll_offset):
 
     stdscr.refresh()
 
-# ------------------ MAIN LOOP ------------------
+# --- Click CLI Definition ---
+@click.command()
+@click.option(
+    "--debug",
+    is_flag=True,
+    help="Enable debug mode for more detailed error reporting (prints full tracebacks).",
+    default=False
+)
+@click.option(
+    "--simulate",
+    is_flag=True,
+    help="Run in simulation mode (no real CAN bus connection).",
+)
+def main(debug:bool, simulate:bool):
+    """
+    Launches a curses-based live view of CAN bus data.
+    """
+    click.echo(f"xxxx", err=True)
+    can_bus = None
+    try:
+        if simulate:
+            import sim_can as can
+            click.echo(f"Simulated CAN Bus", err=True)
+        else:
+            try:
+                import can
+                can_bus = can.interface.Bus(bustype=bustype, channel=channel, bitrate=bitrate)
+                click.echo(f"Connected to CAN Bus {bustype} on {channel} @ {bitrate}bps", err=True)
+            except ImportError:
+                click.echo("Error: 'python-can' library not found. Cannot connect to CAN bus. Use --simulate.", err=True)
+                sys.exit(1)
+        # Set up a receive thread
+        try:
+            bus = can.interface.Bus() #config=config_path)
+        except can.exceptions.CanError as e:
+            click.echo(f"CAN connection failed: {e}", err=True)
+            sys.exit(1)
 
-def main(stdscr):
+        # 2. Set up a notifier to listen for incoming messages
+        class LiveViewListener(can.Listener):
+            """
+            A CAN listener that puts received messages into a queue.
+            """
+            def __init__(self, msg_queue: queue.Queue):
+                self.msg_queue = msg_queue
+
+            def on_message_received(self, msg: can.Message) -> None:
+                """
+                Called automatically by the Notifier when a message is received.
+                """
+                self.msg_queue.put(msg)
+
+            def on_error(self, exc: Exception) -> None:
+                """
+                Called automatically by the Notifier if an error occurs.
+                """
+                print(f"CAN Listener Error: {exc}", file=sys.stderr)
+        
+        msg_queue = queue.Queue()
+        notifier = can.Notifier(bus, [LiveViewListener(msg_queue)]) #, timeout=2)
+
+        # Correct curses initialization and cleanup using try...finally
+        stdscr = None
+        try:
+            stdscr = curses.initscr()
+            curses.noecho()
+            curses.cbreak()
+            stdscr.keypad(True)
+
+            run_liveview_curses(stdscr, can_bus, msg_queue) # Call the curses application logic
+        except Exception as e:
+            if stdscr:
+                stdscr.addstr(str(e))
+                stdscr.addstr(traceback.format_exc())
+                click.echo(traceback.format_exc(), err=True)
+                time.sleep(15);
+            else:
+                click.echo(traceback.format_exc(), err=True)
+        finally:
+            if stdscr:
+                stdscr.keypad(False)
+                curses.echo()
+                curses.nocbreak()
+                curses.endwin()
+                click.echo("Exited curses live view.", err=True)
+            click.echo(traceback.format_exc(), err=True)
+            #traceback.print_exc()
+    except Exception as e:
+        traceback.print_exc()
+    finally:
+        if can_bus:
+            can_bus.shutdown()
+        click.echo("Liveview finished.", err=True)
+
+def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
     curses.curs_set(0)
     stdscr.nodelay(False)
     stdscr.timeout(200)
@@ -149,31 +249,41 @@ def main(stdscr):
     selected = 0  # Cursor row
     scroll_offset = 0
 
+    draw_all:bool = True
+
+    # ------------------ MAIN LOOP ------------------
     while True:
         h, w = stdscr.getmaxyx()
         visible_rows = max(1, h - 4)
 
         if not mode_configure:
-            render_view(stdscr, active_keys, scroll_offset)
+            if draw_all:
+                render_view(stdscr, active_keys, scroll_offset)
+                draw_all = False
             key = stdscr.getch()
             if key == ord('q'):
                 break
             elif key == ord('c'):
                 mode_configure = True
+                draw_all = True
                 selected = 0
                 scroll_offset = 0
             elif key in (curses.KEY_DOWN, ord('j')):
                 active = [e for e in master_list if e[-1]]
                 if scroll_offset + visible_rows < len(active):
                     scroll_offset += 1
+                draw_all = True
             elif key in (curses.KEY_UP, ord('k')):
                 if scroll_offset > 0:
                     scroll_offset -= 1
+                draw_all = True
             else:
-                time.sleep(0.1)
+                pass #time.sleep(0.1)
 
         else:
-            render_configure(stdscr, active_keys, selected, scroll_offset)
+            if draw_all:
+                render_configure(stdscr, active_keys, selected, scroll_offset)
+                draw_all = False
             key = stdscr.getch()
             if key == ord('q'):
                 break
@@ -181,22 +291,71 @@ def main(stdscr):
                 save_active_flags(active_keys)
                 mode_configure = False
                 scroll_offset = 0
+                draw_all = True
             elif key in (curses.KEY_UP, ord('k')):
                 if selected > 0:
                     selected -= 1
                     if selected - scroll_offset < 2 and scroll_offset > 0:
                         scroll_offset -= 1
+                draw_all = True
             elif key in (curses.KEY_DOWN, ord('j')):
                 if selected < len(master_list) - 1:
                     selected += 1
                     if selected - scroll_offset > visible_rows - 3:
                         scroll_offset += 1
+                draw_all = True
             elif key == ord(' '):
                 rowkey, rowval = master_list[selected]
                 if rowkey in active_keys:
                     active_keys.remove(rowkey)
                 else:
                     active_keys.add(rowkey)
+                draw_all = True
+
+        def on_didpid(arb_id, sid, pid, name, desc, value_str):#msg: can.Message):
+            h, w = stdscr.getmaxyx()
+            top, bottom  = 1, h - 1
+            left, right = 0, w - 2
+            n_visible = bottom - top - 1
+            active_list = [
+                (key, value) for key, value in master_list
+                if key in active_keys
+            ]
+            #visible_rows = active_list[scroll_offset: scroll_offset + n_visible]
+            visible_rows = list(islice(iter_all_signals(), scroll_offset, scroll_offset + n_visible))
+            for i, entry in enumerate(visible_rows):
+                (e_can_id, e_sid, e_pid), (label, desc, fn) = entry
+                #safe_addstr(stdscr, top+1+i, 64, f"{i:02} {e_can_id:03X} {e_sid:04X} {e_pid:04X}")
+                if (arb_id & 0xFFF7, sid, pid) == (e_can_id & 0xFFF7, e_sid, e_pid):
+                    safe_addstr(stdscr, top+1+i, 40, value_str+f" {arb_id&0xFFF7:04X} {sid:04X} {pid:04X}")
+                    break
+            #safe_addstr(stdscr, 20, 40, f"no match {arb_id&0xFFF7:04X} {sid:04X} {pid:04X}")
+            #stdscr.addstr(f"Rx {ecu_name} [{msg.dlc}] {decoded}\n")
+
+        # --- Process CAN Messages (from Queue) ---
+        while not msg_queue.empty():
+            try:
+                msg = msg_queue.get_nowait()
+                if not mode_configure:
+                    if msg.arbitration_id & 0x08 == 0:
+                        # Requests silent
+                        continue
+                    # TODO Define UDSListener
+                    my_uds.framing(msg,
+                        lambda arb_id, pid, name, desc, value_str: on_didpid(arb_id, 0x01, pid, name, desc, value_str),
+                        lambda arb_id, pid, name, desc, value_str: on_didpid(arb_id, 0x22, pid, name, desc, value_str))
+                #print(msg)
+                #decoded_msg = decode_7E8_7E9(msg)
+                #stdscr.addstr(line_num, 0, f"[{time.time():.2f}] {decoded_msg}")
+                #stdscr.clrtoeol()
+                #stdscr.refresh()
+                #line_num += 1
+                #if line_num >= curses.LINES - 2: # Keep output within screen
+                #    line_num = 4 # Scroll effect by restarting from top
+            except queue.Empty:
+                pass # Should not happen with empty() check, but good practice
+        stdscr.refresh()
+        #time.sleep(5)
 
 def load_active_flags(master_list):
     """Load saved active (enabled) IDs from file."""
@@ -208,8 +367,8 @@ def load_active_flags(master_list):
     except Exception as e:
         #traceback.print_exc()
         active_set = {k for k,_ in master_list}
-        print('load failed', e, active_set)
-        time.sleep(2)
+        #print('load failed', e, active_set)
+        #time.sleep(2)
     return active_set            
 
 def save_active_flags(active_keys):
@@ -221,11 +380,5 @@ def save_active_flags(active_keys):
         time.sleep(1)
 
 # ------------------ RUN ------------------
-
 if __name__ == "__main__":
-    # Load persistent activation state
-    active_keys = load_active_flags(master_list)
-    #print(active_keys)
-    #sys.exit(0)
-
-    curses.wrapper(main)
+    main()
