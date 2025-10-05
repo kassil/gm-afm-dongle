@@ -16,6 +16,52 @@ import queue
 import types
 from typing import List, Optional, Any
 
+ONE_BYTE_PIDS = {
+    0x04,  # Calculated Engine Load
+    0x05,  # Engine Coolant Temperature
+    0x06,  # Short Term Fuel Trim - Bank 1
+    0x07,  # Long Term Fuel Trim - Bank 1
+    0x08,  # Short Term Fuel Trim - Bank 2
+    0x09,  # Long Term Fuel Trim - Bank 2
+    0x0B,  # Intake Manifold Pressure
+    0x0D,  # Vehicle Speed
+    0x0E,  # Timing Advance
+    0x0F,  # Intake Air Temperature
+    0x11,  # Throttle Position
+    0x2F,  # Fuel Level Input
+    0x33,  # Barometric Pressure
+    0x46,  # Ambient Air Temperature
+    0x47,  # Absolute Throttle Position B
+    0x48,  # Absolute Throttle Position C
+    0x49,  # Accelerator Pedal Position D
+    0x4A,  # Accelerator Pedal Position E
+    0x4B,  # Accelerator Pedal Position F
+    0x4C,  # Commanded Throttle Actuator
+}
+TWO_BYTE_PIDS = {
+    0x0A,  # Fuel Pressure (gauge)
+    0x0C,  # Engine RPM
+    0x10,  # MAF Air Flow Rate
+    0x1F,  # Run Time Since Engine Start
+    0x21,  # Distance Travelled with MIL On
+    0x2D,  # EGR Error
+    0x2E,  # Fuel Trim Bank 1
+    0x2F,  # Fuel Level (some ECUs use 2B)
+    0x31,  # Distance Since Codes Cleared
+    0x5C,  # Engine Oil Temperature
+    0x5E,  # Engine Fuel Rate
+}
+FOUR_BYTE_PIDS = {
+    0x14,  # Oxygen Sensor Voltage + Short Term Fuel Trim (Bank 1 Sensor 1)
+    0x15,  # Oxygen Sensor Voltage + Short Term Fuel Trim (Bank 1 Sensor 2)
+    0x16,  # Oxygen Sensor Voltage + Short Term Fuel Trim (Bank 2 Sensor 1)
+    0x17,  # Oxygen Sensor Voltage + Short Term Fuel Trim (Bank 2 Sensor 2)
+    0x1C,  # OBD Standards this vehicle conforms to
+    0x20,  # PIDs supported [21-40]
+    0x40,  # PIDs supported [41-60]
+    0x60,  # PIDs supported [61-80]
+}
+
 # -----------------------------
 # Exceptions
 # -----------------------------
@@ -116,11 +162,14 @@ class Bus:
             else:
                 # Random mode: generate Mode 1 PID-like messages
                 arb_id = 0x7E8
-                pid = random.choice([0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x11, 0x46])
-                if pid in (0x0C,):  # RPM needs 2 bytes
-                    data = bytes([4, 0x41, pid, random.randint(0, 255), random.randint(0, 255)])
+                r = lambda: random.randint(0, 255)
+                pid = random.choice(list(ONE_BYTE_PIDS | TWO_BYTE_PIDS | FOUR_BYTE_PIDS))
+                if pid in ONE_BYTE_PIDS:
+                    data = bytes([3, 0x41, pid, r()])
+                elif pid in TWO_BYTE_PIDS:
+                    data = bytes([4, 0x41, pid, r(), r()])
                 else:
-                    data = bytes([3, 0x41, pid, random.randint(0, 255)])
+                    data = bytes([6, 0x41, pid, r(), r(), r(), r()])
                 msg = Message(arb_id, data)
             self._queue.put(msg)
             time.sleep(self.interval)
