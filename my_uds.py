@@ -41,6 +41,12 @@ def decode_yes_no(data: CanMsgData) -> str:
     if len(data) < 1:
         raise ValueError("Boolean field expects ≥1 byte payload")
     return "Yes" if data[0] else "No"
+def decode_timing_advance(data: CanMsgData) -> str:
+    """Decode ignition timing advance before TDC."""
+    if not data:
+        return "—"
+    a = data[0]
+    return f"{(a / 2) - 64:.1f}° BTDC"
 
 def search_id_list(
     arb_id: int,
@@ -77,7 +83,7 @@ PID_LIST: List[Tuple[Tuple[int, int], Tuple[str, str, Callable[[CanMsgData], str
     ((0x7E0, 0x0B), ("MAP", "Intake manifold pressure in kPa", decode_pressure)),
     ((0x7E0, 0x0C), ("RPM", "Engine speed in revolutions per minute", decode_rpm)),
     ((0x7E0, 0x0D), ("VSS", "Vehicle speed in km/h", decode_speed)),
-    ((0x7E0, 0x0E), ("Timing Advance", "Ignition timing advance before TDC", decode_generic)),
+    ((0x7E0, 0x0E), ("Timing Advance", "Ignition timing advance before TDC", decode_timing_advance)),
     ((0x7E0, 0x0F), ("Intake Air Temperature", "Temperature of air entering engine", decode_temp)),
     ((0x7E0, 0x10), ("MAF", "Mass air flow rate into engine", decode_generic)),
     ((0x7E0, 0x11), ("TPS", "Throttle position sensor", decode_percent)),
