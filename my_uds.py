@@ -6,84 +6,92 @@ import traceback
 import os
 
 import struct
-DID_NAMES = {
-    # Powertrain / Engine control
-    0x1000: "ECU Identification",
-    0x1001: "VIN (Vehicle Identification Number)",
-    0x1003: "Calibration ID",
-    0x1005: "ECU Serial Number",
-    0x1010: "ECU Software Version",
-    0x1100: "Engine Speed (RPM)",
-    0x1101: "Vehicle Speed",
-    0x1102: "Throttle Position",
-    0x1103: "Intake Manifold Pressure (MAP)",
-    0x1104: "Engine Load",
-    0x1105: "Mass Air Flow (MAF)",
-    0x1106: "Intake Air Temperature",
-    0x1107: "Coolant Temperature",
-    0x1108: "Barometric Pressure",
-    0x1110: "Fuel Rail Pressure",
-    0x1111: "Fuel Pump Command",
-    0x1112: "Oil Pressure",
-    0x1113: "Oil Temperature",
+# Decode functions
+def decode_generic(data): return str(data)
+def decode_rpm(data): return f"{data * 0.25:.0f} rpm"
+def decode_temp(data): return f"{data - 40:.1f} °C"
+def decode_percent(data): return f"{data * 100 / 255:.1f} %"
+def decode_pressure(data): return f"{data / 10:.1f} kPa"
+def decode_speed(data): return f"{data} km/h"
+def decode_voltage(data): return f"{data / 10:.1f} V"
 
-    # GM-specific / AFM-related
-    0x1900: "AFM Active Cylinders Mask",
-    0x1901: "AFM Mode Active (Yes/No)",
-    0x1902: "AFM Commanded State",
-    0x1903: "AFM Transition Counter",
-    0x1904: "AFM Desired Cylinder Torque",
-    0x1905: "AFM Actual Cylinder Torque",
-    0x1906: "AFM Intake Manifold Pressure",
-    0x1907: "AFM Estimated Fuel Savings",
-    0x1910: "AFM Fault Status",
-    0x1911: "AFM Enable Criteria Satisfied",
-    0x1912: "AFM Disable Reason",
+# Call this to search for a PID or DID
+search_list = lambda arb_id, pid, id_list: next((v for k, v in id_list if k == (arb_id, pid)), None)
 
-    # Transmission / Chassis
-    0x2000: "Transmission Gear Position",
-    0x2001: "Transmission Oil Temp",
-    0x2002: "Converter Clutch Command",
-    0x2003: "Vehicle Speed Sensor",
-    0x2010: "Brake Pedal Position",
-    0x2011: "Accelerator Pedal Position",
-    0x2020: "Steering Angle",
-    0x2021: "Yaw Rate",
+PID_LIST = [
+    ((0x7E0, 0x04), ("Calculated Engine Load", "Engine load as a percentage", decode_percent)),
+    ((0x7E0, 0x05), ("Coolant Temperature", "Engine coolant temperature", decode_temp)),
+    ((0x7E0, 0x06), ("Short Term Fuel Trim (B1)", "Bank 1 short-term fuel trim", decode_percent)),
+    ((0x7E0, 0x07), ("Long Term Fuel Trim (B1)", "Bank 1 long-term fuel trim", decode_percent)),
+    ((0x7E0, 0x08), ("Short Term Fuel Trim (B2)", "Bank 2 short-term fuel trim", decode_percent)),
+    ((0x7E0, 0x09), ("Long Term Fuel Trim (B2)", "Bank 2 long-term fuel trim", decode_percent)),
+    ((0x7E0, 0x0A), ("Fuel Pressure", "Measured fuel pressure", decode_pressure)),
+    ((0x7E0, 0x0B), ("Intake Manifold Pressure", "Manifold absolute pressure", decode_pressure)),
+    ((0x7E0, 0x0C), ("Engine RPM", "Engine speed in revolutions per minute", decode_rpm)),
+    ((0x7E0, 0x0D), ("Vehicle Speed", "Vehicle speed in km/h", decode_speed)),
+    ((0x7E0, 0x0E), ("Timing Advance", "Ignition timing advance before TDC", decode_generic)),
+    ((0x7E0, 0x0F), ("Intake Air Temperature", "Temperature of air entering engine", decode_temp)),
+    ((0x7E0, 0x10), ("MAF Air Flow Rate", "Mass air flow rate into engine", decode_generic)),
+    ((0x7E0, 0x11), ("Throttle Position", "Throttle position sensor reading", decode_percent)),
+    ((0x7E0, 0x1F), ("Run Time Since Engine Start", "Elapsed time since engine started", decode_generic)),
+    ((0x7E0, 0x21), ("Distance with MIL On", "Distance traveled with MIL on", decode_generic)),
+    ((0x7E0, 0x2F), ("Fuel Level Input", "Fuel level as a percentage", decode_percent)),
+    ((0x7E0, 0x33), ("Barometric Pressure", "Ambient barometric pressure", decode_pressure)),
+    ((0x7E0, 0x46), ("Ambient Air Temperature", "Outside air temperature", decode_temp)),
+    ((0x7E0, 0x5C), ("Engine Oil Temperature", "Temperature of engine oil", decode_temp)),
+    ((0x7E0, 0x5E), ("Engine Fuel Rate", "Fuel consumption rate", decode_generic)),
+]
 
-    # Environmental / Misc
-    0x3000: "Ambient Air Temperature",
-    0x3001: "Battery Voltage",
-    0x3002: "Alternator Load",
-    0x3003: "Odometer Reading",
-    0x3004: "Ignition Status",
+DID_LIST = [
+    ((0x7E0, 0x1000), ("ECU Identification", "ECU hardware and software identifiers", decode_generic)),
+    ((0x7E0, 0x1001), ("VIN", "Vehicle Identification Number", decode_generic)),
+    ((0x7E0, 0x1003), ("Calibration ID", "Software calibration identifier", decode_generic)),
+    ((0x7E0, 0x1005), ("ECU Serial Number", "Unique ECU serial number", decode_generic)),
+    ((0x7E0, 0x1010), ("ECU Software Version", "Software version of ECU", decode_generic)),
+    ((0x7E0, 0x1100), ("Engine Speed", "Current engine speed (RPM)", decode_rpm)),
+    ((0x7E0, 0x1101), ("Vehicle Speed", "Vehicle speed in km/h", decode_speed)),
+    ((0x7E0, 0x1102), ("Throttle Position", "Throttle angle position", decode_percent)),
+    ((0x7E0, 0x1103), ("Intake Manifold Pressure", "Intake manifold pressure", decode_pressure)),
+    ((0x7E0, 0x1104), ("Engine Load", "Engine load as a percentage", decode_percent)),
+    ((0x7E0, 0x1105), ("Mass Air Flow", "Mass air flow rate", decode_generic)),
+    ((0x7E0, 0x1106), ("Intake Air Temperature", "Temperature of intake air", decode_temp)),
+    ((0x7E0, 0x1107), ("Coolant Temperature", "Engine coolant temperature", decode_temp)),
+    ((0x7E0, 0x1108), ("Barometric Pressure", "Atmospheric pressure", decode_pressure)),
+    ((0x7E0, 0x1110), ("Fuel Rail Pressure", "Fuel rail pressure", decode_pressure)),
+    ((0x7E0, 0x1111), ("Fuel Pump Command", "Fuel pump control signal", decode_percent)),
+    ((0x7E0, 0x1112), ("Oil Pressure", "Measured engine oil pressure", decode_pressure)),
+    ((0x7E0, 0x1113), ("Oil Temperature", "Measured oil temperature", decode_temp)),
 
-    0xF40C: "GM Engine Load (Alt)",
-    0xF41F: "GM AFM Active",
-}
+    ((0x7E0, 0x1900), ("AFM Active Cyl Mask", "Active cylinder mask during AFM", decode_generic)),
+    ((0x7E0, 0x1901), ("AFM Mode Active", "Whether AFM is active", decode_generic)),
+    ((0x7E0, 0x1902), ("AFM Commanded State", "Commanded AFM state", decode_generic)),
+    ((0x7E0, 0x1903), ("AFM Transition Count", "AFM activation/deactivation counter", decode_generic)),
+    ((0x7E0, 0x1904), ("AFM Desired Torque", "Desired cylinder torque (AFM)", decode_generic)),
+    ((0x7E0, 0x1905), ("AFM Actual Torque", "Actual cylinder torque (AFM)", decode_generic)),
+    ((0x7E0, 0x1906), ("AFM Manifold Pressure", "Intake manifold pressure during AFM", decode_pressure)),
+    ((0x7E0, 0x1907), ("AFM Fuel Savings", "Estimated fuel savings from AFM", decode_percent)),
+    ((0x7E0, 0x1910), ("AFM Fault Status", "Current AFM fault status bits", decode_generic)),
+    ((0x7E0, 0x1911), ("AFM Enable Criteria", "Conditions for AFM enablement", decode_generic)),
+    ((0x7E0, 0x1912), ("AFM Disable Reason", "Reason AFM was disabled", decode_generic)),
 
-PID_NAMES = {
-    0x04: "Calculated Engine Load",
-    0x05: "Coolant Temperature",
-    0x06: "Short Term Fuel Trim (Bank 1)",
-    0x07: "Long Term Fuel Trim (Bank 1)",
-    0x08: "Short Term Fuel Trim (Bank 2)",
-    0x09: "Long Term Fuel Trim (Bank 2)",
-    0x0A: "Fuel Pressure",
-    0x0B: "Intake Manifold Pressure",
-    0x0C: "Engine RPM",
-    0x0D: "Vehicle Speed",
-    0x0E: "Timing Advance",
-    0x0F: "Intake Air Temperature",
-    0x10: "MAF Air Flow Rate",
-    0x11: "Throttle Position",
-    0x1F: "Run Time Since Engine Start",
-    0x21: "Distance Traveled with MIL On",
-    0x2F: "Fuel Level Input",
-    0x33: "Barometric Pressure",
-    0x46: "Ambient Air Temperature",
-    0x5C: "Engine Oil Temperature",
-    0x5E: "Engine Fuel Rate",
-}
+    ((0x7E0, 0x2000), ("Gear Position", "Transmission gear selection", decode_generic)),
+    ((0x7E0, 0x2001), ("Trans Oil Temp", "Transmission oil temperature", decode_temp)),
+    ((0x7E0, 0x2002), ("Clutch Command", "Torque converter clutch command", decode_generic)),
+    ((0x7E0, 0x2003), ("VSS", "Vehicle speed sensor reading", decode_speed)),
+    ((0x7E0, 0x2010), ("Brake Pedal Pos", "Brake pedal position sensor", decode_percent)),
+    ((0x7E0, 0x2011), ("Accel Pedal Pos", "Accelerator pedal position sensor", decode_percent)),
+    ((0x7E0, 0x2020), ("Steering Angle", "Current steering wheel angle", decode_generic)),
+    ((0x7E0, 0x2021), ("Yaw Rate", "Vehicle yaw rate", decode_generic)),
+
+    ((0x7E0, 0x3000), ("Ambient Temp", "Outside air temperature", decode_temp)),
+    ((0x7E0, 0x3001), ("Battery Voltage", "System voltage", decode_voltage)),
+    ((0x7E0, 0x3002), ("Alternator Load", "Alternator output load", decode_percent)),
+    ((0x7E0, 0x3003), ("Odometer", "Total vehicle distance traveled", decode_generic)),
+    ((0x7E0, 0x3004), ("Ignition Status", "Ignition key/run state", decode_generic)),
+
+    ((0x7E0, 0xF40C), ("GM Engine Load (Alt)", "Alternate engine load calculation", decode_percent)),
+    ((0x7E0, 0xF41F), ("GM AFM Active", "Active Fuel Management status", decode_generic)),
+]
 
 ECU_NAMES = {
     # Powertrain / standard UDS IDs
@@ -136,29 +144,6 @@ ECU_NAMES = {
     0x52A: "Suspension / Ride Height / Damping",
 }
 
-def decode_pid(pid, payload):
-    try:
-        A, B = payload[0], payload[1] if len(payload) > 1 else 0
-        if pid == 0x0C:  # RPM
-            return f"{((A * 256) + B) / 4:.0f} rpm"
-        elif pid == 0x0D:  # Speed
-            return f"{A} km/h"
-        elif pid == 0x0B:  # MAP
-            return f"{A} kPa"
-        elif pid == 0x04:  # Load
-            return f"{A * 100 / 255:.1f}%"
-        elif pid == 0x05:  # Coolant temp
-            return f"{A - 40} °C"
-        elif pid == 0x0F:  # Intake air temp
-            return f"{A - 40} °C"
-        elif pid == 0x10:  # MAF
-            return f"{((A * 256) + B) / 100:.2f} g/s"
-        elif pid == 0x11:  # Throttle
-            return f"{A * 100 / 255:.1f}%"
-    except Exception:
-        pass
-    return None
-
 def decode_did(did, payload):
     if did == 0xF41F:
         return "Active" if payload[0] else "Inactive"
@@ -169,47 +154,65 @@ def decode_did(did, payload):
 
 # --- Human-friendly CAN frame decoder for GMT900 Tahoe ---
 def decode_frame(msg):
-
+    #TODO Mask response bit 3?
     if msg.arbitration_id in ARB_DECODERS:
-        return ARB_DECODERS[msg.arbitration_id](msg.data)
+        return ARB_DECODERS[msg.arbitration_id](msg)
     return "Raw " + " ".join(f"{b:02X}" for b in msg.data)
 
 def decode_ecu(arb_id) -> str:
     # Direction: 0x08 bit toggles request vs. response
     dir = '<--' if (arb_id & 0x08) else '-->'
     # Normalize the ID for lookup (clear bit 3)
-    ecu = ECU_NAMES.get(arb_id & 0xFFF7, ECU_NAMES.get(arb_id | 0x08, f"{arb_id:03X}")) # Unknown ECU
+    req_id = arb_id & 0xFFF7
+    resp_id = arb_id | 0x08
+    ecu = ECU_NAMES.get(req_id, ECU_NAMES.get(resp_id, f"{arb_id:03X}")) # Unknown ECU
     return f"{dir} {ecu}"
 
-def decode_7E8_7E9(data: bytes) -> str:
+def decode_7E8_7E9(msg) -> str:
     """Interpret UDS or OBD-II response frames from ECM (0x7E8) or TCM (0x7E9)."""
+    data = msg.data
     if not data:
         return None
+
+    # TODO Check data[0] == len(data)
 
     # Response to Mode 0x01 (0x41)
     if data[0] == 0x04 and data[1] == 0x41:
         pid = data[2]
+        # Assemble 16-bit integer
         payload = data[3:]
-        value = decode_pid(pid, payload)
-        if value is not None:
-            return f"{PID_NAMES.get(pid, f'PID 0x{pid:02X}')}: {value}"
+        value = (payload[0] << 8) | payload[1]  # Big-endian
+        k = (msg.arbitration_id, pid)
+        if k in PID_LIST:
+            (name, _, decode_fn) = PID_LIST[k]
+            value_str = decode_fn(value)
+            return f"{name}: {value}"
         else:
-            return f"PID 0x{pid:02X} -> {payload}"
+            # Unknown ECU, PID combination
+            data_str = ' '.join(f'{b:02X}' for b in msg.data)
+            return f"PID {pid:04X} Raw {data_str}"
 
     # Response to Mode 0x22 (manufacturer-specific)
     # UDS 0x22 Read Data By Identifier
     elif data[0] >= 3 and data[1] == 0x62:
-        did_hi, did_lo = data[2], data[3]
-        did = (did_hi << 8) | did_lo
+        # Assemble 16-bit integer
         payload = data[4:]
+        value = (payload[0] << 8) | payload[1]  # Big-endian
         value = decode_did(did, payload)
-        if value is not None:
-            return f"{DID_NAMES.get(did, f'DID 0x{did:04X}')}: {value}"
+        did = (data[2] << 8) | data[3]  # Big-endian
+        k = (msg.arbitration_id, did)
+        if k in DID_LIST:
+            (name, _, decode_fn) = DID_LIST[k]
+            value_str = decode_fn(value)
+            return f"{name}: {value}"
         else:
-            return f"DID 0x{did:04X} -> {payload}"
+            # Unknown ECU, DID combination
+            data_str = ' '.join(f'{b:02X}' for b in msg.data)
+            return f"DID {did:04X} Raw {data_str}"
 
-def decode_0C9(data: bytes) -> str:
+def decode_0C9(msg) -> str:
     """Decode GM SDM (Airbag / Accel sensor) frame 0x0C9."""
+    data = msg.data
     if len(data) < 7:
         return "Invalid SDM frame length"
 
@@ -249,10 +252,10 @@ class SummaryListener(can.Listener):
         decoded = decode_frame(msg)
         ecu_name = decode_ecu(msg.arbitration_id)
         if decoded:
-            click.echo(f"    Rx {ecu_name} [{msg.dlc}] {decoded}")
+            click.echo(f"Rx {ecu_name} [{msg.dlc}] {decoded}")
         else:
             data_str = ' '.join(f'{b:02X}' for b in msg.data)
-            click.echo(f"    Rx {ecu_name} [{msg.dlc}] {data_str}")
+            click.echo(f"Rx {ecu_name} [{msg.dlc}] {data_str}")
 
 def interpret_pid(pid: int, payload: bytes) -> str:
     """Decode standard OBD-II PIDs from Service 01 (0x41 responses)."""
