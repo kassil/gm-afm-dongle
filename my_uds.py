@@ -85,6 +85,38 @@ PID_NAMES = {
     0x5E: "Engine Fuel Rate",
 }
 
+ECU_NAMES = {
+    # Powertrain / standard UDS IDs
+    0x7E0: "ECM (Engine Control Module)",
+    0x7E1: "TCM (Transmission Control Module)",
+    0x7E2: "ABS / EBCM (Brake Control)",
+    0x7E3: "SRS / Airbag Module",
+    0x7E4: "BCM (Body Control Module)",
+    0x7E5: "IPC (Instrument Cluster)",
+    0x7E6: "HVAC / Climate Control",
+    0x7E7: "Gateway / Diagnostic Manager",
+
+    # Some GM and SAE tools use 0x77x range instead of 0x7Ex
+    0x77E: "ECM (alt address, Powertrain)",
+    0x77F: "TCM (alt address, Transmission)",
+    0x771: "ABS (alt address)",
+    0x772: "SRS (alt address)",
+    0x773: "BCM (alt address)",
+    0x774: "IPC (alt address)",
+    0x775: "HVAC (alt address)",
+    0x776: "Gateway (alt address)",
+
+    # Non-diagnostic broadcast frames seen on GM CAN
+    0x1CB: "BCM (Body Control Broadcast)",
+    0x1CD: "IPC (Cluster Data)",
+    0x1E9: "Powertrain Torque / Throttle Data",
+    0x1EB: "Cruise / Throttle Control",
+    0x1F1: "Engine Status / Sensor Data",
+    0x3C9: "SDM (Airbag Module)",
+    0x524: "Steering / Chassis Module",
+    0x528: "Transfer Case / Differential",
+}
+
 def decode_pid(pid, payload):
     try:
         A, B = payload[0], payload[1] if len(payload) > 1 else 0
@@ -149,12 +181,11 @@ def decode_frame(msg):
         return "Raw " + " ".join(f"{b:02X}" for b in data)
 
 def decode_ecu(arb_id) -> str:
-    return {
-        0x7E0: "--> ECM", # (Engine Control)",
-        0x7E1: "--> TCM", # (Transmission Control)"
-        0x7E8: "<-- ECM", # (Engine Control)",
-        0x7E9: "<-- TCM", # (Transmission Control)"
-    }.get(arb_id, f"0x{arb_id:X}") # Unknown ECU
+    # Direction: 0x08 bit toggles request vs. response
+    dir = '<--' if (arb_id & 0x08) else '-->'
+    # Normalize the ID for lookup (clear bit 3)
+    ecu = ECU_NAMES.get(arb_id & 0xFFF7, f"0x{arb_id:X}") # Unknown ECU
+    return f"{dir} {ecu}"
 
 class SummaryListener(can.Listener):
     """
