@@ -44,7 +44,7 @@ def send_uds_message(bus_obj: can.Bus, arb_id: int, data_bytes: list, descriptio
                       data=uds_data,
                       is_extended_id=False) # Standard 11-bit CAN ID
     data_str = ' '.join(f'{b:02X}' for b in msg.data)
-    click.echo(f"Tx {my_uds.decode_ecu(arb_id)} {description}: [{msg.dlc}] {data_str}", err=True)
+    click.echo(f"Tx {my_uds.decode_ecu(arb_id)} {description}: [{msg.dlc}] {data_str}")
     bus_obj.send(msg)
 
 # --- Main CLI Command using click ---
@@ -141,7 +141,7 @@ def main(config_path: str | None, debug: bool):
                 )
                 data_str = ' '.join(f'{b:02X}' for b in msg.data)
                 ecu = my_uds.decode_ecu(arb_id)
-                click.echo(f"Tx {ecu} {name}: {msg.arbitration_id:03X} [{msg.dlc}] {data_str}", err=True)
+                click.echo(f"Tx {ecu} {name}: [{msg.dlc}] {data_str}")
                 bus.send(msg)
                 time.sleep(0.05)  # Small gap between requests
             time.sleep(TESTER_PRESENT_INTERVAL)
