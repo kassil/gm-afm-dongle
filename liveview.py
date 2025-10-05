@@ -20,31 +20,44 @@ master_list = [
     (0x7E0, 0x01, 0x05, "Coolant Temp", "Engine coolant temperature", decode_temp, True),
     (0x7E8, 0x22, 0x1234, "Oil Pressure", "Measured oil pressure", decode_percent, False),
     (0x7E8, 0x22, 0x1235, "Throttle", "Throttle position", decode_percent, True),
+    (0x7E8, 0x22, 0x1236, "Battery Volt", "System voltage", decode_percent, True),
+    (0x7E8, 0x22, 0x1237, "Fuel Level", "Fuel tank level", decode_percent, True),
+    (0x7E8, 0x22, 0x1238, "Manifold Temp", "Air manifold temperature", decode_temp, False),
+    (0x7E8, 0x22, 0x1239, "Oil Temp", "Engine oil temperature", decode_temp, False),
+    (0x7E8, 0x22, 0x1240, "Torque", "Delivered engine torque", decode_percent, True),
+    (0x7E8, 0x22, 0x1241, "MAP", "Manifold absolute pressure", decode_percent, True),
 ]
 
 # ------------------ RENDERING FUNCTIONS ------------------
 
-def render_view(stdscr):
+def render_view(stdscr, scroll_offset):
     stdscr.clear()
-    stdscr.addstr(0, 0, "VIEW MODE  (press 'c' to configure, 'q' to quit)")
+    stdscr.addstr(0, 0, "VIEW MODE  (↑↓ scroll, 'c'=configure, 'q'=quit)")
     row = 2
-    for ecu, sid, pid, label, desc, fn, enabled in master_list:
-        if not enabled:
-            continue
+    visible_rows = curses.LINES - 3
+    active = [e for e in master_list if e[-1]]
+    visible = active[scroll_offset: scroll_offset + visible_rows]
+    for ecu, sid, pid, label, desc, fn, enabled in visible:
         msg = bytes([random.randint(0, 255) for _ in range(2)])
         val = fn(msg)
         stdscr.addstr(row, 0, f"{ecu:04X}  SID:{sid:02X} PID:{pid:04X}  {label:12} {val}")
         row += 1
     stdscr.refresh()
 
-def render_configure(stdscr, selected):
+def render_configure(stdscr, selected, scroll_offset):
     stdscr.clear()
-    stdscr.addstr(0, 0, "CONFIGURE MODE  (↑↓ or j/k move, space=toggle, v=view, q=quit)")
+    stdscr.addstr(0, 0, "CONFIGURE MODE  (↑↓/j/k move, space=toggle, v=view, q=quit)")
     row = 2
-    for i, (ecu, sid, pid, label, desc, fn, enabled) in enumerate(master_list):
+    visible_rows = curses.LINES - 3
+    visible = master_list[scroll_offset: scroll_offset + visible_rows]
+
+    for i, entry in enumerate(visible):
+        ecu, sid, pid, label, desc, fn, enabled = entry
         mark = "[X]" if enabled else "[ ]"
         line = f"{mark} {ecu:04X} SID:{sid:02X} PID:{pid:04X}  {label:12}  {desc}"
-        if i == selected:
+
+        global_index = scroll_offset + i
+        if global_index == selected:
             stdscr.attron(curses.A_REVERSE)
             stdscr.addstr(row, 0, line)
             stdscr.attroff(curses.A_REVERSE)
@@ -60,31 +73,49 @@ def main(stdscr):
     stdscr.nodelay(False)
     mode_configure = False
     selected = 0
+    scroll_offset = 0
 
     while True:
+        visible_rows = curses.LINES - 3
         if not mode_configure:
-            render_view(stdscr)
+            render_view(stdscr, scroll_offset)
             key = stdscr.getch()
             if key == ord('q'):
                 break
             elif key == ord('c'):
                 mode_configure = True
+                selected = 0
+                scroll_offset = 0
+            elif key in (curses.KEY_DOWN, ord('j')):
+                active = [e for e in master_list if e[-1]]
+                if scroll_offset + visible_rows < len(active):
+                    scroll_offset += 1
+            elif key in (curses.KEY_UP, ord('k')):
+                if scroll_offset > 0:
+                    scroll_offset -= 1
             else:
-                time.sleep(0.2)
+                time.sleep(0.1)
         else:
-            render_configure(stdscr, selected)
+            render_configure(stdscr, selected, scroll_offset)
             key = stdscr.getch()
             if key == ord('q'):
                 break
+            elif key == ord('v'):
+                mode_configure = False
+                scroll_offset = 0
             elif key in (curses.KEY_UP, ord('k')):
-                selected = (selected - 1) % len(master_list)
+                if selected > 0:
+                    selected -= 1
+                    if selected - scroll_offset < 2 and scroll_offset > 0:
+                        scroll_offset -= 1
             elif key in (curses.KEY_DOWN, ord('j')):
-                selected = (selected + 1) % len(master_list)
+                if selected < len(master_list) - 1:
+                    selected += 1
+                    if selected - scroll_offset > visible_rows - 3:
+                        scroll_offset += 1
             elif key == ord(' '):
                 ecu, sid, pid, label, desc, fn, enabled = master_list[selected]
                 master_list[selected] = (ecu, sid, pid, label, desc, fn, not enabled)
-            elif key == ord('v'):
-                mode_configure = False
 
 # ------------------ RUN ------------------
 
