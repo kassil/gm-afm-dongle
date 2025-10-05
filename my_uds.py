@@ -1,38 +1,67 @@
+# TODO Maybe rename to decode_functions
 import can
 import click
-import time
-import sys
-import traceback
 import os
-
 import struct
-# Decode functions
-def decode_generic(data): return str(data)
-def decode_rpm(data): return f"{data * 0.25:.0f} rpm"
-def decode_temp(data): return f"{data - 40:.1f} °C"
-def decode_percent(data): return f"{data * 100 / 255:.1f} %"
-def decode_pressure(data): return f"{data / 10:.1f} kPa"
-def decode_speed(data): return f"{data} km/h"
-def decode_voltage(data): return f"{data / 10:.1f} V"
+import sys
+import time
+import traceback
+from typing import Callable, List, Tuple, Union
+
+CanMsgData = Union[bytes, bytearray] # can.Message.data
+
+def decode_pressure(data: CanMsgData) -> str:
+    if len(data) < 1:
+        raise ValueError("Pressure PID expects ≥1 byte payload")
+    return f"{data[0]} kPa"
+def decode_rpm(data: CanMsgData) -> str:
+    if len(data) < 2:
+        raise ValueError("RPM PID expects ≥2 byte payload")
+    rpm = ((data[0] << 8) | data[1]) / 4
+    return f"{rpm:.0f} rpm"
+def decode_speed(data: CanMsgData) -> str:
+    if len(data) < 1:
+        raise ValueError("Speed PID expects ≥1 byte payload")
+    return f"{data[0]} km/h"
+def decode_percent(data: CanMsgData) -> str:
+    if len(data) < 1:
+        raise ValueError("Percent PID expects ≥1 byte payload")
+    return f"{data[0] * 100.0 / 255.0:.1f} %"
+def decode_temp(data: CanMsgData) -> str:
+    if len(data) < 1:
+        raise ValueError("Temperature PID expects ≥1 byte payload")
+    return f"{data[0] - 40} °C"
+def decode_voltage(data: CanMsgData) -> str:
+    if len(data) < 1:
+        raise ValueError("Voltage expects ≥1 byte payload")
+    return f"{data[0] / 10:.1f} V"
+def decode_generic(data: CanMsgData) -> str:
+    return " ".join(f"{b:02X}" for b in data)
+def decode_yes_no(data: CanMsgData) -> str:
+    if len(data) < 1:
+        raise ValueError("Boolean field expects ≥1 byte payload")
+    return "Yes" if data[0] else "No"
 
 # Call this to search for a PID or DID
 search_list = lambda arb_id, pid, id_list: next((v for k, v in id_list if k == (arb_id, pid)), None)
 
-PID_LIST = [
+# Mode 1 Parameter ID (PID)
+PID_LIST: List[Tuple[Tuple[int, int], Tuple[str, str, Callable[[CanMsgData], str]]]] = [
     ((0x7E0, 0x04), ("Calculated Engine Load", "Engine load as a percentage", decode_percent)),
-    ((0x7E0, 0x05), ("Coolant Temperature", "Engine coolant temperature", decode_temp)),
-    ((0x7E0, 0x06), ("Short Term Fuel Trim (B1)", "Bank 1 short-term fuel trim", decode_percent)),
-    ((0x7E0, 0x07), ("Long Term Fuel Trim (B1)", "Bank 1 long-term fuel trim", decode_percent)),
-    ((0x7E0, 0x08), ("Short Term Fuel Trim (B2)", "Bank 2 short-term fuel trim", decode_percent)),
-    ((0x7E0, 0x09), ("Long Term Fuel Trim (B2)", "Bank 2 long-term fuel trim", decode_percent)),
-    ((0x7E0, 0x0A), ("Fuel Pressure", "Measured fuel pressure", decode_pressure)),
-    ((0x7E0, 0x0B), ("Intake Manifold Pressure", "Manifold absolute pressure", decode_pressure)),
-    ((0x7E0, 0x0C), ("Engine RPM", "Engine speed in revolutions per minute", decode_rpm)),
-    ((0x7E0, 0x0D), ("Vehicle Speed", "Vehicle speed in km/h", decode_speed)),
+    ((0x7E0, 0x05), ("ECT", "Engine coolant temperature", decode_temp)),
+    ((0x7E0, 0x06), ("STFT B1", "Bank 1 short-term fuel trim", decode_percent)),
+    ((0x7E0, 0x07), ("LTFT B1", "Bank 1 long-term fuel trim", decode_percent)),
+    ((0x7E0, 0x08), ("STFT B2", "Bank 2 short-term fuel trim", decode_percent)),
+    ((0x7E0, 0x09), ("LTFT B2", "Bank 2 long-term fuel trim", decode_percent)),
+    ((0x7E0, 0x0A), ("FP", "Fuel rail pressure", decode_pressure)),
+    ((0x7E0, 0x0B), ("MAP", "Intake manifold pressure in kPa", decode_pressure)),
+    ((0x7E0, 0x0C), ("RPM", "Engine speed in revolutions per minute", decode_rpm)),
+    ((0x7E0, 0x0D), ("VSS", "Vehicle speed in km/h", decode_speed)),
     ((0x7E0, 0x0E), ("Timing Advance", "Ignition timing advance before TDC", decode_generic)),
     ((0x7E0, 0x0F), ("Intake Air Temperature", "Temperature of air entering engine", decode_temp)),
-    ((0x7E0, 0x10), ("MAF Air Flow Rate", "Mass air flow rate into engine", decode_generic)),
-    ((0x7E0, 0x11), ("Throttle Position", "Throttle position sensor reading", decode_percent)),
+    ((0x7E0, 0x10), ("MAF", "Mass air flow rate into engine", decode_generic)),
+    ((0x7E0, 0x11), ("TPS", "Throttle position sensor", decode_percent)),
+    ((0x7E0, 0x46), ("AAT", "Outside air temperature", decode_temp)),
     ((0x7E0, 0x1F), ("Run Time Since Engine Start", "Elapsed time since engine started", decode_generic)),
     ((0x7E0, 0x21), ("Distance with MIL On", "Distance traveled with MIL on", decode_generic)),
     ((0x7E0, 0x2F), ("Fuel Level Input", "Fuel level as a percentage", decode_percent)),
@@ -41,8 +70,8 @@ PID_LIST = [
     ((0x7E0, 0x5C), ("Engine Oil Temperature", "Temperature of engine oil", decode_temp)),
     ((0x7E0, 0x5E), ("Engine Fuel Rate", "Fuel consumption rate", decode_generic)),
 ]
-
-DID_LIST = [
+# UDS Data By Identifer (DID)
+DID_LIST: List[Tuple[Tuple[int, int], Tuple[str, str, Callable[[CanMsgData], str]]]] = [
     ((0x7E0, 0x1000), ("ECU Identification", "ECU hardware and software identifiers", decode_generic)),
     ((0x7E0, 0x1001), ("VIN", "Vehicle Identification Number", decode_generic)),
     ((0x7E0, 0x1003), ("Calibration ID", "Software calibration identifier", decode_generic)),
@@ -61,18 +90,18 @@ DID_LIST = [
     ((0x7E0, 0x1111), ("Fuel Pump Command", "Fuel pump control signal", decode_percent)),
     ((0x7E0, 0x1112), ("Oil Pressure", "Measured engine oil pressure", decode_pressure)),
     ((0x7E0, 0x1113), ("Oil Temperature", "Measured oil temperature", decode_temp)),
-
-    ((0x7E0, 0x1900), ("AFM Active Cyl Mask", "Active cylinder mask during AFM", decode_generic)),
-    ((0x7E0, 0x1901), ("AFM Mode Active", "Whether AFM is active", decode_generic)),
-    ((0x7E0, 0x1902), ("AFM Commanded State", "Commanded AFM state", decode_generic)),
-    ((0x7E0, 0x1903), ("AFM Transition Count", "AFM activation/deactivation counter", decode_generic)),
-    ((0x7E0, 0x1904), ("AFM Desired Torque", "Desired cylinder torque (AFM)", decode_generic)),
-    ((0x7E0, 0x1905), ("AFM Actual Torque", "Actual cylinder torque (AFM)", decode_generic)),
-    ((0x7E0, 0x1906), ("AFM Manifold Pressure", "Intake manifold pressure during AFM", decode_pressure)),
-    ((0x7E0, 0x1907), ("AFM Fuel Savings", "Estimated fuel savings from AFM", decode_percent)),
-    ((0x7E0, 0x1910), ("AFM Fault Status", "Current AFM fault status bits", decode_generic)),
-    ((0x7E0, 0x1911), ("AFM Enable Criteria", "Conditions for AFM enablement", decode_generic)),
-    ((0x7E0, 0x1912), ("AFM Disable Reason", "Reason AFM was disabled", decode_generic)),
+    # AFM / GM-specific group
+    ((0x7E0, 0x1900), ("AFM Active Cylinders Mask", "Active cylinder bitmask", decode_generic)),
+    ((0x7E0, 0x1901), ("AFM Mode Active", "Indicates if AFM is currently active", decode_yes_no)),
+    ((0x7E0, 0x1902), ("AFM Commanded State", "AFM commanded on/off state", decode_yes_no)),
+    ((0x7E0, 0x1903), ("AFM Transition Counter", "Counts AFM on/off transitions", decode_generic)),
+    ((0x7E0, 0x1904), ("AFM Desired Cylinder Torque", "Desired torque in AFM mode", decode_generic)),
+    ((0x7E0, 0x1905), ("AFM Actual Cylinder Torque", "Measured torque in AFM mode", decode_generic)),
+    ((0x7E0, 0x1906), ("AFM Intake Manifold Pressure", "MAP during AFM mode", decode_pressure)),
+    ((0x7E0, 0x1907), ("AFM Estimated Fuel Savings", "Estimated fuel saved by AFM", decode_percent)),
+    ((0x7E0, 0x1910), ("AFM Fault Status", "Current AFM fault state", decode_generic)),
+    ((0x7E0, 0x1911), ("AFM Enable Criteria Satisfied", "If AFM enable conditions are met", decode_yes_no)),
+    ((0x7E0, 0x1912), ("AFM Disable Reason", "Reason AFM disabled", decode_generic)),
 
     ((0x7E0, 0x2000), ("Gear Position", "Transmission gear selection", decode_generic)),
     ((0x7E0, 0x2001), ("Trans Oil Temp", "Transmission oil temperature", decode_temp)),
@@ -82,15 +111,15 @@ DID_LIST = [
     ((0x7E0, 0x2011), ("Accel Pedal Pos", "Accelerator pedal position sensor", decode_percent)),
     ((0x7E0, 0x2020), ("Steering Angle", "Current steering wheel angle", decode_generic)),
     ((0x7E0, 0x2021), ("Yaw Rate", "Vehicle yaw rate", decode_generic)),
-
+    # Environmental / Misc
     ((0x7E0, 0x3000), ("Ambient Temp", "Outside air temperature", decode_temp)),
     ((0x7E0, 0x3001), ("Battery Voltage", "System voltage", decode_voltage)),
     ((0x7E0, 0x3002), ("Alternator Load", "Alternator output load", decode_percent)),
     ((0x7E0, 0x3003), ("Odometer", "Total vehicle distance traveled", decode_generic)),
     ((0x7E0, 0x3004), ("Ignition Status", "Ignition key/run state", decode_generic)),
-
+    # GM alternate / legacy
     ((0x7E0, 0xF40C), ("GM Engine Load (Alt)", "Alternate engine load calculation", decode_percent)),
-    ((0x7E0, 0xF41F), ("GM AFM Active", "Active Fuel Management status", decode_generic)),
+    ((0x7E0, 0xF41F), ("GM AFM Active", "Active Fuel Management engaged", decode_yes_no)),
 ]
 
 ECU_NAMES = {
@@ -144,7 +173,7 @@ ECU_NAMES = {
     0x52A: "Suspension / Ride Height / Damping",
 }
 
-def decode_did(did, payload):
+def decode_did(did: int, payload: CanMsgData):
     if did == 0xF41F:
         return "Active" if payload[0] else "Inactive"
     elif did == 0xF40C:
@@ -153,13 +182,13 @@ def decode_did(did, payload):
     return None
 
 # --- Human-friendly CAN frame decoder for GMT900 Tahoe ---
-def decode_frame(msg):
+def decode_frame(msg: can.Message):
     #TODO Mask response bit 3?
     if msg.arbitration_id in ARB_DECODERS:
         return ARB_DECODERS[msg.arbitration_id](msg)
     return "Raw " + " ".join(f"{b:02X}" for b in msg.data)
 
-def decode_ecu(arb_id) -> str:
+def decode_ecu(arb_id: int) -> str:
     # Direction: 0x08 bit toggles request vs. response
     dir = '<--' if (arb_id & 0x08) else '-->'
     # Normalize the ID for lookup (clear bit 3)
@@ -168,7 +197,7 @@ def decode_ecu(arb_id) -> str:
     ecu = ECU_NAMES.get(req_id, ECU_NAMES.get(resp_id, f"{arb_id:03X}")) # Unknown ECU
     return f"{dir} {ecu}"
 
-def decode_7E8_7E9(msg) -> str:
+def decode_7E8_7E9(msg: can.Message) -> str:
     """Interpret UDS or OBD-II response frames from ECM (0x7E8) or TCM (0x7E9)."""
     data = msg.data
     if not data:
@@ -231,7 +260,6 @@ def decode_0C9(msg) -> str:
             f"Ignition={'On' if ignition_on else 'Off'}, "
             f"Crash={'Yes' if crash_flag else 'No'}, "
             f"Counter={counter}")
-
 
 ARB_DECODERS = {
     0x0C9: decode_0C9,
