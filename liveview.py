@@ -164,17 +164,17 @@ def main(debug:bool, simulate:bool):
         else:
             try:
                 import can
-                can_bus = can.interface.Bus(bustype=bustype, channel=channel, bitrate=bitrate)
-                click.echo(f"Connected to CAN Bus {bustype} on {channel} @ {bitrate}bps", err=True)
             except ImportError:
                 click.echo("Error: 'python-can' library not found. Cannot connect to CAN bus. Use --simulate.", err=True)
                 sys.exit(1)
         # Set up a receive thread
         try:
-            bus = can.interface.Bus() #config=config_path)
+            can_bus = can.interface.Bus() #config=config_path, bustype=bustype, channel=channel, bitrate=bitrate)
         except can.exceptions.CanError as e:
             click.echo(f"CAN connection failed: {e}", err=True)
             sys.exit(1)
+        #bustype, channel, bitrate = None, None, None
+        #click.echo(f"Connected to CAN Bus {bustype} on {channel} @ {bitrate}bps", err=True)
 
         # 2. Set up a notifier to listen for incoming messages
         class LiveViewListener(can.Listener):
@@ -197,7 +197,7 @@ def main(debug:bool, simulate:bool):
                 print(f"CAN Listener Error: {exc}", file=sys.stderr)
         
         msg_queue = queue.Queue()
-        notifier = can.Notifier(bus, [LiveViewListener(msg_queue)]) #, timeout=2)
+        notifier = can.Notifier(can_bus, [LiveViewListener(msg_queue)]) #, timeout=2)
 
         # Correct curses initialization and cleanup using try...finally
         stdscr = None
@@ -215,7 +215,9 @@ def main(debug:bool, simulate:bool):
                 click.echo(traceback.format_exc(), err=True)
                 time.sleep(15);
             else:
+                click.echo('here 1', err=True)
                 click.echo(traceback.format_exc(), err=True)
+            sys.exit(1)
         finally:
             if stdscr:
                 stdscr.keypad(False)
@@ -223,10 +225,13 @@ def main(debug:bool, simulate:bool):
                 curses.nocbreak()
                 curses.endwin()
                 click.echo("Exited curses live view.", err=True)
+            click.echo('here 3', err=True)
             click.echo(traceback.format_exc(), err=True)
             #traceback.print_exc()
     except Exception as e:
+        click.echo('here 2', err=True)
         traceback.print_exc()
+        sys.exit(1)
     finally:
         if can_bus:
             can_bus.shutdown()
@@ -328,6 +333,7 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
                 (e_can_id, e_sid, e_pid), (_, _, _) = entry
                 if (arb_id & 0xFFF7, sid, pid) == (e_can_id & 0xFFF7, e_sid, e_pid):
                     safe_addstr(stdscr, top+1+i, 42, f"{value[:15]:15}")
+                    stdscr.clrtoeol()
                     break
             # Store it for rapid screen updates
             value_cache[(arb_id & 0xFFF7, sid, pid)] = value
@@ -344,14 +350,6 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
                     my_uds.framing(msg,
                         lambda arb_id, pid, name, desc, value_str: on_didpid(arb_id, 0x01, pid, name, desc, value_str),
                         lambda arb_id, pid, name, desc, value_str: on_didpid(arb_id, 0x22, pid, name, desc, value_str))
-                #print(msg)
-                #decoded_msg = decode_7E8_7E9(msg)
-                #stdscr.addstr(line_num, 0, f"[{time.time():.2f}] {decoded_msg}")
-                #stdscr.clrtoeol()
-                #stdscr.refresh()
-                #line_num += 1
-                #if line_num >= curses.LINES - 2: # Keep output within screen
-                #    line_num = 4 # Scroll effect by restarting from top
             except queue.Empty:
                 pass # Should not happen with empty() check, but good practice
         stdscr.refresh()
