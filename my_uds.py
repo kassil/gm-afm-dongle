@@ -401,6 +401,25 @@ def framing(msg: can.Message, on_mode1, on_mode22) -> str:
         #        on_mode22(msg.arbitration_id, did, name, desc, meaning)
         return f'{ecu} Negative Response SID {original_sid:02X} {meaning}'
 
+    # --- Mode 0x01 Request ---
+    # This block handles messages *sent to* ECUs, typically from a scan tool.
+    # Service ID 0x01 indicates a request for current data.
+    elif service_id == 0x01:
+        # Expected format: [report_size] [0x01] [PID1] [PID2]...
+        # report_size for a single PID request is 0x02 (0x01 + PID)
+        if report_size < 0x02:
+            return f'{ecu} frm_short SID {service_id:02X} Raw {_format_raw_data(data)}'
+
+        # Extract all requested PIDs
+        # PIDs start from data[2]
+        requested_pids = []
+        for i in range(2, 1 + report_size): # Iterate from data[2] up to data[report_size]
+            if i < len(data): # Ensure we don't go out of bounds of actual received data
+                requested_pids.append(data[i])
+
+        pids_str = ", ".join(f"{p:02X}" for p in requested_pids)
+        return f"{ecu} Mode 01 Request PIDs [{pids_str}]"
+
     # --- Response to Mode 0x01 (0x41) ---
     if service_id == 0x41:
         # [report_size] [0x41] [PID] [Data...]
