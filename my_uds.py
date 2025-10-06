@@ -374,7 +374,7 @@ def framing(msg: can.Message, on_mode1, on_mode22) -> str:
 
     # --- UDS Negative Response (0x7F) ---
     if service_id == 0x7F:
-        if len(data) < 4:
+        if report_size < 3:
             return f'{ecu} frm_short_7F: {_format_raw_data(data)}'
         original_sid = data[2]
         nrc = data[3]
@@ -405,17 +405,12 @@ def framing(msg: can.Message, on_mode1, on_mode22) -> str:
     # This block handles messages *sent to* ECUs, typically from a scan tool.
     # Service ID 0x01 indicates a request for current data.
     elif service_id == 0x01:
-        # Expected format: [report_size] [0x01] [PID1] [PID2]...
-        # report_size for a single PID request is 0x02 (0x01 + PID)
-        if report_size < 0x02:
+        # Expected format: [report_size] [0x01] [PID] [PID]...
+        if report_size < 2:
             return f'{ecu} frm_short SID {service_id:02X} Raw {_format_raw_data(data)}'
 
         # Extract all requested PIDs
-        # PIDs start from data[2]
-        requested_pids = []
-        for i in range(2, 1 + report_size): # Iterate from data[2] up to data[report_size]
-            if i < len(data): # Ensure we don't go out of bounds of actual received data
-                requested_pids.append(data[i])
+        requested_pids = [ x for x in data[2:1 + report_size] ]
 
         pids_str = ", ".join(f"{p:02X}" for p in requested_pids)
         return f"{ecu} Mode 01 Request PIDs [{pids_str}]"
@@ -423,13 +418,12 @@ def framing(msg: can.Message, on_mode1, on_mode22) -> str:
     # --- Response to Mode 0x01 (0x41) ---
     if service_id == 0x41:
         # [report_size] [0x41] [PID] [Data...]
-        if report_size < 0x03:
+        if report_size < 3:
             return f'{ecu} frm_short SID {service_id:02X} Raw {_format_raw_data(data)}'
         pid = data[2]
-        data_length = report_size - 2
-        if len(data) < (3 + data_length):
+        if report_size < 3:
             return f'{ecu} frm_short SID {service_id:02X} PID {pid:02X} Raw {_format_raw_data(data)}'
-        payload_bytes = data[3:3 + data_length]
+        payload_bytes = data[3:1 + report_size]
         v = search_id_list(msg.arbitration_id & 0xFFF7, pid, PID_LIST)
         if v:
             (name, desc, decode_fn) = v
@@ -441,13 +435,13 @@ def framing(msg: can.Message, on_mode1, on_mode22) -> str:
 
     # --- Response to Mode 0x22 (UDS Read Data By Identifier - 0x62) ---
     elif service_id == 0x62:
-        if report_size < 0x03:
+        # Format report_size 0x62 DID_Hi DID_Lo Payload...
+        if report_size < 3:
             return f'{ecu} frm_short SID {service_id:02X} {_format_raw_data(data)}'
         did = (data[2] << 8) | data[3]
-        did_data_length = report_size - 3
-        if len(data) < (4 + did_data_length):
+        if report_size < 4:
             return f'{ecu} frm_short SID {service_id:02X} DID {did:04X} Raw {_format_raw_data(data)}'
-        payload_bytes = data[4:4 + did_data_length]
+        payload_bytes = data[4:1 + report_size]
         v = search_id_list(msg.arbitration_id & 0xFFF7, did, DID_LIST)
         if v:
             (name, desc, decode_fn) = v
