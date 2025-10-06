@@ -219,7 +219,6 @@ class Notifier:
 
     def stop(self):
         self.running = False
-        self.bus.shutdown()
         self.thread.join(timeout=1.0)
 
 # -----------------------------
