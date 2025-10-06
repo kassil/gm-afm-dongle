@@ -372,6 +372,35 @@ def framing(msg: can.Message, on_mode1, on_mode22) -> str:
     if len(data) < (report_size + 1):
         return f'frm_mismatch report:{report_size} act:{len(data)} {_format_raw_data(data)}'
 
+    # --- UDS Negative Response (0x7F) ---
+    if service_id == 0x7F:
+        if len(data) < 4:
+            return f'frm_malformed_7F: {_format_raw_data(data)}'
+        original_sid = data[2]
+        nrc = data[3]
+        nrc_meanings = {
+            0x10: "General Reject",
+            0x11: "Service Not Supported",
+            0x12: "Sub-function Not Supported",
+            0x13: "Incorrect Message Length or Invalid Format",
+            0x22: "Conditions Not Correct",
+            0x31: "Request Out of Range",
+            0x33: "Security Access Denied",
+            0x78: "Request Correctly Received, Response Pending",
+            0x7E: "Sub-function Not Supported in Active Session",
+            0x7F: "Service Not Supported in Active Session",
+        }
+        meaning = nrc_meanings.get(nrc, f"Unknown NRC {nrc:02X}")
+        #if original_sid == 0x01:
+        #    v = search_id_list(msg.arbitration_id & 0xFFF7, orig_id, PID_LIST)
+        #    if v:
+        #        on_mode22(msg.arbitration_id, did, name, desc, meaning)
+        #elif original_sid == 0x22:
+        #    v = search_id_list(msg.arbitration_id & 0xFFF7, orig_id, DID_LIST)
+        #    if v:
+        #        on_mode22(msg.arbitration_id, did, name, desc, meaning)
+        return f'frm_neg_rsp SID={original_sid:02X} NRC={nrc:02X} ({meaning}) {_format_raw_data(data)}'
+
     # --- Response to Mode 0x01 (0x41) ---
     if service_id == 0x41:
         # [report_size] [0x41] [PID] [Data...]
@@ -543,7 +572,7 @@ def send_request(bus: can.interface.Bus, arb_id:int, sid:int, pid:int) -> None:
         print(f"[WARN] Unsupported SID {sid:02X} for PID {pid:04X}")
         return
 
-    msg = can.Message(arbitration_id=arb_id,
+    msg = can.Message(arbitration_id=arb_id & 0xFFF7,
                         data=data,
                         is_extended_id=False)
     #print(f"[TX] {arb_id:03X}  →  SID={sid:02X} PID={pid:04X}  data={data}")
