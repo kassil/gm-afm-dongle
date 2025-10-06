@@ -10,6 +10,7 @@ import random
 import sys
 import time
 import traceback
+import typing
 from typing import Any, Iterator, Tuple, Callable#, List, Tuple, Union
 
 STATE_FILE = Path("active_ids.json")
@@ -207,7 +208,8 @@ def main(debug:bool, simulate:bool):
             curses.cbreak()
             stdscr.keypad(True)
 
-            run_liveview_curses(stdscr, can_bus, msg_queue) # Call the curses application logic
+            with open('liveview.log', 'a') as log_f:
+                run_liveview_curses(stdscr, can_bus, msg_queue, log_f) # Call the curses application logic
         except Exception as e:
             if stdscr:
                 stdscr.addstr(str(e))
@@ -239,7 +241,7 @@ def main(debug:bool, simulate:bool):
             can_bus.shutdown()
         click.echo("Liveview finished.", err=True)
 
-def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
+def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue, log_f: typing.TextIO):
     curses.curs_set(0)
     stdscr.nodelay(False)
     stdscr.timeout(200)
@@ -350,7 +352,9 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
 
         def request_row(row:int, arb_id:int, sid:int, pid:int) -> bool:
             my_uds.send_request(can_bus, arb_id, sid, pid)
-            log_win.addstr(f"Tx {arb_id:03X} {sid:04X} {pid:04X}\n")
+            log = f"Tx {arb_id:03X} {sid:04X} {pid:04X}\n"
+            log_win.addstr(log)
+            log_f.write(log)
             return False # Keep searching
 
         # --- Send CAN requests
@@ -367,9 +371,12 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
                     # Request from tester
                     #log_win.addstr(f"Rx {msg.arbitration_id:03X} request\n")
                     continue
-                my_uds.framing(msg,
+                log = my_uds.framing(msg,
                     lambda arb_id, pid, name, desc, value_str: on_didpid(log_win, mode_configure, arb_id, 0x01, pid, name, desc, value_str),
                     lambda arb_id, pid, name, desc, value_str: on_didpid(log_win, mode_configure, arb_id, 0x22, pid, name, desc, value_str))
+                log += '\n'
+                log_win.addstr(log)
+                log_f.write(log)
             except queue.Empty:
                 pass # Should not happen with empty() check, but good practice
         data_win.refresh()
