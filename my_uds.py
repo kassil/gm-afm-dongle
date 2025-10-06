@@ -418,7 +418,7 @@ def framing(msg: can.Message, on_mode1, on_mode22) -> str:
 
         payload_bytes = data[4 : 4 + did_data_length]
         #value_int = _get_value_from_bytes(payload_bytes) # This might return bytes if length isn't 1,2,4
-        v = search_id_list(msg.arbitration_id & 0xFFF7, pid, PID_LIST)
+        v = search_id_list(msg.arbitration_id & 0xFFF7, did, PID_LIST)
         if v:
             (name, desc, decode_fn) = v
             value_str = decode_fn(payload_bytes)
