@@ -359,7 +359,7 @@ def framing(msg: can.Message, on_mode1, on_mode22) -> str:
     if not data:
         return f"{ecu} frm_empty"  # No bytes received!
 
-    if msg.arbitration_id not in (0x7E8, 0x7E9):
+    if (msg.arbitration_id | 0x08) not in (0x7E8, 0x7E9):
         return f"{ecu} {_format_raw_data(data)}"
 
     # [report size] [Service ID] ...

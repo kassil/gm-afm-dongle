@@ -374,7 +374,7 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue, log_f: typing.T
                 if (msg.arbitration_id & 0x08) == 0:
                     # Request from tester
                     #log_win.addstr(f"Rx {msg.arbitration_id:03X} request\n")
-                    continue
+                    pass #continue
                 log = my_uds.framing(msg,
                     lambda arb_id, pid, name, desc, value_str: on_didpid(log_win, mode_configure, arb_id, 0x01, pid, name, desc, value_str),
                     lambda arb_id, pid, name, desc, value_str: on_didpid(log_win, mode_configure, arb_id, 0x22, pid, name, desc, value_str))

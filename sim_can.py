@@ -109,6 +109,7 @@ class Bus:
         #self.playback_file = playback_file
         #self.interval = interval
         self.interval = 0.05
+        self.local_echo = True
         playback_file = None
         self.running = False
         self._queue: queue.Queue[Message] = queue.Queue()
@@ -186,8 +187,8 @@ class Bus:
 
     def send(self, msg: Message):
         """Send message (no-op in simulation)."""
-        #print(f"[SimBus] send: {msg}")
-        pass
+        if self.local_echo:
+            self._queue.put(msg)
 
 
 # -----------------------------------------------------------------------------
