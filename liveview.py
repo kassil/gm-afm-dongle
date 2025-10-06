@@ -363,8 +363,9 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
         while not msg_queue.empty():
             try:
                 msg = msg_queue.get_nowait()
-                if msg.arbitration_id & 0x08 == 0:
-                    # Requests silent
+                if (msg.arbitration_id & 0x08) == 0:
+                    # Request from tester
+                    #log_win.addstr(f"Rx {msg.arbitration_id:03X} request\n")
                     continue
                 my_uds.framing(msg,
                     lambda arb_id, pid, name, desc, value_str: on_didpid(log_win, mode_configure, arb_id, 0x01, pid, name, desc, value_str),
