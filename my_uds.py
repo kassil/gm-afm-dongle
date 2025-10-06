@@ -452,6 +452,18 @@ def framing(msg: can.Message, on_mode1, on_mode22) -> str:
         on_tester_present_response(ecu_id, sub_function)
         return f"{ecu} Tester Present Response {sub_function}"
 
+    # --- UDS Read Data By Identifier Request ---
+    elif service_id == 0x22:
+        # Format: [report_size] 0x22 [DID_Hi] [DID_Lo] ...
+        if report_size < 3:
+            return f'{ecu} frm_short SID {service_id:02X} {_format_raw_data(data)}'
+        payload = data[2:1 + report_size]
+        dids = []
+        for i in range(len(payload)//2):
+            dids.append(f"{(payload[2*i] << 8) | payload[2*i + 1]:04X}")
+        dids = ', '.join(dids)
+        return f"{ecu} Read DIDs {dids}"
+
     # --- Response to Mode 0x22 (UDS Read Data By Identifier - 0x62) ---
     elif service_id == 0x62:
         # Format report_size 0x62 DID_Hi DID_Lo Payload...
