@@ -433,6 +433,25 @@ def framing(msg: can.Message, on_mode1, on_mode22) -> str:
         # Unknown ECU, PID combination
         return f"{ecu} PID {pid:04X} Payload {_format_raw_data(payload_bytes)}"
 
+    # --- Tester Present Request (0x3E) ---
+    elif service_id == 0x3E:
+        # Expected format: [report_size] [0x3E] [SubFunction]
+        # report_size for 0x3E request is 0x01 (0x3E + SubFunction)
+        if report_size < 0x01:
+            return f'{ecu} frm_short Tester Present Request Raw {_format_raw_data(data)}'
+        sub_function = f'SubFunction {data[2]:02X}' if report_size > 1 else ''
+        return f"{ecu} Tester Present Request {sub_function}"
+
+    # --- Tester Present Response (0x7E) ---
+    elif service_id == 0x7E:
+        # Expected format: [report_size] [0x7E] [SubFunction]
+        # report_size for 0x7E response is 0x01 (0x7E + SubFunction)
+        if report_size < 0x01:
+            return f'{ecu} frm_short Tester Present Response Raw {_format_raw_data(data)}'
+        sub_function = f'SubFunction {data[2]:02X}' if report_size > 1 else ''
+        on_tester_present_response(ecu_id, sub_function)
+        return f"{ecu} Tester Present Response {sub_function}"
+
     # --- Response to Mode 0x22 (UDS Read Data By Identifier - 0x62) ---
     elif service_id == 0x62:
         # Format report_size 0x62 DID_Hi DID_Lo Payload...
