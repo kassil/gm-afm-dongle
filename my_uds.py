@@ -514,3 +514,58 @@ def interpret_gm_did(pid: int, payload: bytes) -> str:
 
     except Exception as e:
         return f"DID decode error ({pid:02X}): {e}"
+
+def send_enter_diag_session(bus: can.interface.Bus):
+    """
+    Sends a UDS Diagnostic Session Control request (0x10 0x03) to enter
+    the Extended Diagnostic Session.
+    """
+    ECU_REQ_ID = 0x7E0
+    SESSION_CONTROL_SID = 0x10
+    EXTENDED_SESSION_SUBFUNCTION = 0x03
+
+    # ISO-TP/UDS-style frame: first byte = message length
+    uds_data = [0x02, SESSION_CONTROL_SID, EXTENDED_SESSION_SUBFUNCTION]
+    msg = can.Message(arbitration_id=ECU_REQ_ID,
+                      data=uds_data,
+                      is_extended_id=False)
+
+    #print(f"[UDS] Sending Enter Diagnostic Session request: {uds_data}")
+    bus.send(msg)
+
+def send_tester_present(bus: can.interface.Bus):
+    """
+    Sends a UDS Tester Present message (0x3E 0x00) to keep the diagnostic session alive.
+    """
+    ECU_REQ_ID = 0x7E0
+    TESTER_PRESENT_SID = 0x3E
+    TESTER_PRESENT_SUBFUNCTION = 0x00
+
+    uds_data = [0x02, TESTER_PRESENT_SID, TESTER_PRESENT_SUBFUNCTION]
+    msg = can.Message(arbitration_id=ECU_REQ_ID,
+                      data=uds_data,
+                      is_extended_id=False)
+
+    #print(f"[UDS] Sending Tester Present message: {uds_data}")
+    bus.send(msg)
+
+def send_request(bus: can.interface.Bus, arb_id:int, sid:int, pid:int) -> None:
+    """
+    Iterate over all signals and send OBD-II or UDS requests to their arbitration IDs.
+    """
+    # Build the message according to the SID
+    if sid == 0x01:
+        # OBD-II Mode 1 request: 02 01 PID
+        data = [0x02, 0x01, pid]
+    elif sid == 0x22:
+        # UDS ReadDataByIdentifier request: 03 22 high(pid) low(pid)
+        data = [0x03, 0x22, (pid >> 8) & 0xFF, pid & 0xFF]
+    else:
+        print(f"[WARN] Unsupported SID {sid:02X} for PID {pid:04X}")
+        return
+
+    msg = can.Message(arbitration_id=arb_id,
+                        data=data,
+                        is_extended_id=False)
+    #print(f"[TX] {arb_id:03X}  →  SID={sid:02X} PID={pid:04X}  data={data}")
+    bus.send(msg)

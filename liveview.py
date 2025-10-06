@@ -257,6 +257,8 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
 
     draw_all:bool = True
 
+    my_uds.send_enter_diag_session(can_bus)
+
     # ------------------ MAIN LOOP ------------------
     while True:
         h, w = stdscr.getmaxyx()
@@ -350,6 +352,11 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
                     draw_row_value(arb_id, sid, pid, value, row, e_can_id, e_sid, e_pid))
             # Store it for rapid screen updates
             value_cache[(arb_id & 0xFFF7, sid, pid)] = value
+
+        # --- Send CAN requests
+        my_uds.send_tester_present(can_bus)
+        for ((arb_id, sid, pid), _) in iter_all_signals():
+            my_uds.send_request(can_bus, arb_id, sid, pid)
 
         # --- Process CAN Messages (from Queue) ---
         while not msg_queue.empty():
