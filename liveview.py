@@ -158,6 +158,7 @@ def main(debug:bool, simulate:bool):
     """
     click.echo(f"xxxx", err=True)
     can_bus = None
+    notifier = None
     try:
         if simulate:
             import sim_can as can
@@ -176,6 +177,7 @@ def main(debug:bool, simulate:bool):
             sys.exit(1)
         #bustype, channel, bitrate = None, None, None
         #click.echo(f"Connected to CAN Bus {bustype} on {channel} @ {bitrate}bps", err=True)
+        click.echo(f"Connected to CAN bus", err=True)
 
         # 2. Set up a notifier to listen for incoming messages
         class LiveViewListener(can.Listener):
@@ -198,7 +200,7 @@ def main(debug:bool, simulate:bool):
                 print(f"CAN Listener Error: {exc}", file=sys.stderr)
         
         msg_queue = queue.Queue()
-        notifier = can.Notifier(can_bus, [LiveViewListener(msg_queue)]) #, timeout=2)
+        notifier = can.Notifier(can_bus, [LiveViewListener(msg_queue)])
 
         # Correct curses initialization and cleanup using try...finally
         stdscr = None
@@ -236,8 +238,10 @@ def main(debug:bool, simulate:bool):
         sys.exit(1)
     finally:
         if notifier:
+            click.echo("Notifier stop.", err=True)
             notifier.stop()  # Stop listener threads first
         if can_bus:
+            click.echo("Bus shutdown.", err=True)
             can_bus.shutdown()
         click.echo("Liveview finished.", err=True)
 
