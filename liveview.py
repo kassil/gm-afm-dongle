@@ -87,18 +87,18 @@ def render_view(data_win, active_keys, scroll_offset):
     # Column headers over the top line of box
     header_y = top
     safe_addstr(data_win, header_y, left + 2,
-                f"{'ECU':6} {'SID':4} {'PID':4} {'Label':15} {'Value':>15}")
+                f"{'ECU':3} {'SID':3} {'PID':4} {'Label':16} {'Value':15}")
 
     def draw_row(data_win, row, can_id, sid, pid):
         msg = bytes([random.randint(0, 255) for _ in range(2)])
         id_list = my_uds.PID_LIST if sid == 0x01 else my_uds.DID_LIST
         (label, _, _) = my_uds.search_id_list(can_id, pid, id_list)
-        value = value_cache.get((can_id & 0xFFF7, sid, pid), 'loadin?g')
+        value = value_cache.get((can_id & 0xFFF7, sid, pid), '------')
         safe_addstr(
             data_win,
             row,
             left + 2,
-            f"{can_id:6X} {sid:3X} {pid:04X} {label[:15]:15} {value[:15]:>15}"
+            f"{can_id:3X} {sid:3X} {pid:04X} {label[:16]:16} {value[:15]:15}"
         )
         return False # Continue
     iter_visible_rows(data_win, active_keys, scroll_offset, lambda row, can_id, sid, pid: \
@@ -336,8 +336,8 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue, log_f: typing.T
 
         def draw_row_value(arb_id:int, sid:int, pid:int, value:str, row:int, e_can_id:int, e_sid:int, e_pid:int) -> bool:
             if (arb_id & 0xFFF7, sid, pid) == (e_can_id & 0xFFF7, e_sid, e_pid):
-                safe_addstr(data_win, row, 42, f"{value[:15]:15}")
-                data_win.clrtoeol()
+                safe_addstr(data_win, row, 32, f"{value[:15]:15} ")
+                #data_win.clrtoeol()
                 return True  # Stop searching
             return False # Keep searching
 
