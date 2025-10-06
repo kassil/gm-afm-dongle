@@ -67,19 +67,19 @@ def draw_box(win, top:int, left:int, bottom:int, right:int) -> None:
 
 # ------------------ RENDER FUNCTIONS ------------------
 
-def render_view(stdscr, active_keys, scroll_offset):
-    stdscr.clear()
-    h, w = stdscr.getmaxyx()
+def render_view(data_win, active_keys, scroll_offset):
+    data_win.clear()
+    h, w = data_win.getmaxyx()
     title = "VIEW MODE  (↑↓ scroll, 'c'=configure, 'q'=quit)"
-    safe_addstr(stdscr, 0, 0, title[: w - 1])
+    safe_addstr(data_win, 0, 0, title[: w - 1])
 
     top, bottom  = 1, h - 1
     left, right = 0, w - 2
-    draw_box(stdscr, top, left, bottom, right)
+    draw_box(data_win, top, left, bottom, right)
 
     # Column headers over the top line of box
     header_y = top
-    safe_addstr(stdscr, header_y, left + 2,
+    safe_addstr(data_win, header_y, left + 2,
                 f"{'ECU':6} {'SID':4} {'PID':4} {'Label':15} {'Value':>15}")
 
     n_visible = bottom - top - 1
@@ -94,28 +94,28 @@ def render_view(stdscr, active_keys, scroll_offset):
         msg = bytes([random.randint(0, 255) for _ in range(2)])
         value = value_cache.get((can_id & 0xFFF7, sid, pid), 'loading')
         safe_addstr(
-            stdscr,
+            data_win,
             row_y,
             left + 2,
             f"{can_id:6X} {sid:3X} {pid:04X} {label[:15]:15} {value[:15]:>15}"
         )
         row_y += 1
 
-    stdscr.refresh()
+    data_win.refresh()
 
-def render_configure(stdscr, active_keys, selected, scroll_offset):
-    stdscr.clear()
-    h, w = stdscr.getmaxyx()
+def render_configure(data_win, active_keys, selected, scroll_offset):
+    data_win.clear()
+    h, w = data_win.getmaxyx()
     title = "CONFIGURE MODE  (↑↓/j/k move, space=toggle, v=view, q=quit)"
-    safe_addstr(stdscr, 0, 0, title[: w - 1])
+    safe_addstr(data_win, 0, 0, title[: w - 1])
 
     top, bottom  = 1, h - 1
     left, right = 0, w - 2
-    draw_box(stdscr, top, left, bottom, right)
+    draw_box(data_win, top, left, bottom, right)
 
     # Column headers over the top line of box
     header_y = top
-    safe_addstr(stdscr, header_y, left + 2,
+    safe_addstr(data_win, header_y, left + 2,
                 f"{' ':4} {'ECU':6} {'SID':4} {'PID':4} {'Label':15} {'Description'}")
 
     n_visible = bottom - top - 1
@@ -127,14 +127,14 @@ def render_configure(stdscr, active_keys, selected, scroll_offset):
         line = f"{mark:4} {can_id:6X} {sid:3X} {pid:04X} {label[:15]:15} {desc[:w - 45]}"
         global_index = scroll_offset + i
         if global_index == selected:
-            stdscr.attron(curses.A_REVERSE)
-            safe_addstr(stdscr, row_y, left + 1, line)
-            stdscr.attroff(curses.A_REVERSE)
+            data_win.attron(curses.A_REVERSE)
+            safe_addstr(data_win, row_y, left + 1, line)
+            data_win.attroff(curses.A_REVERSE)
         else:
-            safe_addstr(stdscr, row_y, left + 1, line)
+            safe_addstr(data_win, row_y, left + 1, line)
         row_y += 1
 
-    stdscr.refresh()
+    data_win.refresh()
 
 # --- Click CLI Definition ---
 @click.command()
@@ -248,6 +248,8 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
     curses.init_pair(1, curses.COLOR_GREEN, -1)
     curses.init_pair(2, curses.COLOR_RED, -1)
 
+    (data_win, log_win) = create_windows(stdscr)
+
     # Load persistent activation state
     active_keys = load_active_flags(master_list)
 
@@ -261,14 +263,14 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
 
     # ------------------ MAIN LOOP ------------------
     while True:
-        h, w = stdscr.getmaxyx()
+        h, w = data_win.getmaxyx()
         visible_rows = max(1, h - 4)
 
         if not mode_configure:
             if draw_all:
-                render_view(stdscr, active_keys, scroll_offset)
+                render_view(data_win, active_keys, scroll_offset)
                 draw_all = False
-            key = stdscr.getch()
+            key = data_win.getch()
             if key == ord('q'):
                 break
             elif key == ord('c'):
@@ -290,9 +292,9 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
 
         else:
             if draw_all:
-                render_configure(stdscr, active_keys, selected, scroll_offset)
+                render_configure(data_win, active_keys, selected, scroll_offset)
                 draw_all = False
-            key = stdscr.getch()
+            key = data_win.getch()
             if key == ord('q'):
                 break
             elif key == ord('v'):
@@ -322,7 +324,7 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
 
         def iter_visible_rows(visit_row) -> bool:
             # Assume view window is visible
-            h, w = stdscr.getmaxyx()
+            h, w = data_win.getmaxyx()
             top, bottom  = 1, h - 1
             left, right = 0, w - 2
             n_visible = bottom - top - 1
@@ -340,8 +342,8 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
 
         def draw_row_value(arb_id:int, sid:int, pid:int, value:str, row:int, e_can_id:int, e_sid:int, e_pid:int) -> bool:
             if (arb_id & 0xFFF7, sid, pid) == (e_can_id & 0xFFF7, e_sid, e_pid):
-                safe_addstr(stdscr, row, 42, f"{value[:15]:15}")
-                stdscr.clrtoeol()
+                safe_addstr(data_win, row, 42, f"{value[:15]:15}")
+                data_win.clrtoeol()
                 return True  # Stop searching
             return False # Keep searching
 
@@ -357,6 +359,9 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
         my_uds.send_tester_present(can_bus)
         for ((arb_id, sid, pid), _) in iter_all_signals():
             my_uds.send_request(can_bus, arb_id, sid, pid)
+            log_win.addstr(f"Tx {arb_id:03X} {sid:04X} {pid:04X}\n")
+
+        log_win.refresh()
 
         # --- Process CAN Messages (from Queue) ---
         while not msg_queue.empty():
@@ -370,7 +375,7 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
                     lambda arb_id, pid, name, desc, value_str: on_didpid(mode_configure, arb_id, 0x22, pid, name, desc, value_str))
             except queue.Empty:
                 pass # Should not happen with empty() check, but good practice
-        stdscr.refresh()
+        data_win.refresh()
         #time.sleep(5)
 
 def load_active_flags(master_list):
@@ -394,6 +399,25 @@ def save_active_flags(active_keys):
     except Exception as e:
         print(f"Warning: could not save active IDs: {e}")
         time.sleep(1)
+
+def create_windows(stdscr):
+    """Create two stacked windows that fill the terminal."""
+    h, w = stdscr.getmaxyx()
+    # Ensure we have at least some minimum space
+    if h < 4 or w < 30:
+        raise ValueError('Your screen is too small')
+
+    # split roughly in half. Give top the extra row if odd.
+    top_h = (h - 1) // 2
+    bottom_h = (h - 1) - top_h
+
+    data_win = curses.newwin(top_h, w, 0, 0)
+    data_win.nodelay(False)
+    data_win.timeout(200)
+    data_win.keypad(True)
+    log_win = curses.newwin(bottom_h, w, top_h, 0)
+    log_win.scrollok(True)
+    return data_win, log_win    
 
 # ------------------ RUN ------------------
 if __name__ == "__main__":
