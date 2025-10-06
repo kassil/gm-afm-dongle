@@ -347,21 +347,25 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
                 return True  # Stop searching
             return False # Keep searching
 
-        def on_didpid(mode_configure:bool, arb_id:int, sid:int, pid:int, label:str, desc:str, value:str):
+        def on_didpid(log_win, mode_configure:bool, arb_id:int, sid:int, pid:int, label:str, desc:str, value:str):
             # Draw if on screen
             if not mode_configure:
                 iter_visible_rows(lambda row, e_can_id, e_sid, e_pid: \
                     draw_row_value(arb_id, sid, pid, value, row, e_can_id, e_sid, e_pid))
             # Store it for rapid screen updates
             value_cache[(arb_id & 0xFFF7, sid, pid)] = value
+            log_win.addstr(f"Rx {arb_id:03X} {sid:04X} {pid:04X}\n")
+
+        def request_row(row:int, arb_id:int, sid:int, pid:int) -> bool:
+            my_uds.send_request(can_bus, arb_id, sid, pid)
+            log_win.addstr(f"Tx {arb_id:03X} {sid:04X} {pid:04X}\n")
+            return False # Keep searching
 
         # --- Send CAN requests
         my_uds.send_tester_present(can_bus)
-        for ((arb_id, sid, pid), _) in iter_all_signals():
-            my_uds.send_request(can_bus, arb_id, sid, pid)
-            log_win.addstr(f"Tx {arb_id:03X} {sid:04X} {pid:04X}\n")
-
-        log_win.refresh()
+        if not mode_configure:
+            # Request on-screen DIDs and PIDs
+            iter_visible_rows(request_row)
 
         # --- Process CAN Messages (from Queue) ---
         while not msg_queue.empty():
@@ -371,11 +375,12 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
                     # Requests silent
                     continue
                 my_uds.framing(msg,
-                    lambda arb_id, pid, name, desc, value_str: on_didpid(mode_configure, arb_id, 0x01, pid, name, desc, value_str),
-                    lambda arb_id, pid, name, desc, value_str: on_didpid(mode_configure, arb_id, 0x22, pid, name, desc, value_str))
+                    lambda arb_id, pid, name, desc, value_str: on_didpid(log_win, mode_configure, arb_id, 0x01, pid, name, desc, value_str),
+                    lambda arb_id, pid, name, desc, value_str: on_didpid(log_win, mode_configure, arb_id, 0x22, pid, name, desc, value_str))
             except queue.Empty:
                 pass # Should not happen with empty() check, but good practice
         data_win.refresh()
+        log_win.refresh()
         #time.sleep(5)
 
 def load_active_flags(master_list):
