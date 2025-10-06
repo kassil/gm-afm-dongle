@@ -355,27 +355,27 @@ ARB_DECODERS = {
 def framing(msg: can.Message, on_mode1, on_mode22) -> str:
     """Interpret UDS or OBD-II response frames from ECM (0x7E8) or TCM (0x7E9)."""
     data = msg.data
-
+    ecu = decode_ecu(msg.arbitration_id)
     if not data:
-        return 'frm_empty'  # No bytes received!
+        return f"{ecu} frm_empty"  # No bytes received!
 
     if msg.arbitration_id not in (0x7E8, 0x7E9):
-        return f"ECU:{decode_ecu(msg.arbitration_id)} {_format_raw_data(data)}"
+        return f"{ecu} {_format_raw_data(data)}"
 
     # [report size] [Service ID] ...
     if len(data) < 2:
-        return f"frm_too_short [{len(data)}]: {_format_raw_data(data)}"
+        return f"{ecu} frm_short [{len(data)}]: {_format_raw_data(data)}"
 
     report_size = data[0]
     service_id = data[1]
     # Reported size at most actual size?
     if len(data) < (report_size + 1):
-        return f'frm_mismatch report:{report_size} act:{len(data)} {_format_raw_data(data)}'
+        return f'{ecu} frm_underrun {_format_raw_data(data)}'
 
     # --- UDS Negative Response (0x7F) ---
     if service_id == 0x7F:
         if len(data) < 4:
-            return f'frm_malformed_7F: {_format_raw_data(data)}'
+            return f'{ecu} frm_short_7F: {_format_raw_data(data)}'
         original_sid = data[2]
         nrc = data[3]
         nrc_meanings = {
@@ -390,7 +390,7 @@ def framing(msg: can.Message, on_mode1, on_mode22) -> str:
             0x7E: "Sub-function Not Supported in Active Session",
             0x7F: "Service Not Supported in Active Session",
         }
-        meaning = nrc_meanings.get(nrc, f"Unknown NRC {nrc:02X}")
+        meaning = nrc_meanings.get(nrc, f"NRC {nrc:02X}")
         #if original_sid == 0x01:
         #    v = search_id_list(msg.arbitration_id & 0xFFF7, orig_id, PID_LIST)
         #    if v:
@@ -399,47 +399,47 @@ def framing(msg: can.Message, on_mode1, on_mode22) -> str:
         #    v = search_id_list(msg.arbitration_id & 0xFFF7, orig_id, DID_LIST)
         #    if v:
         #        on_mode22(msg.arbitration_id, did, name, desc, meaning)
-        return f'frm_neg_rsp SID={original_sid:02X} NRC={nrc:02X} ({meaning}) {_format_raw_data(data)}'
+        return f'{ecu} Negative Response SID {original_sid:02X} {meaning}'
 
     # --- Response to Mode 0x01 (0x41) ---
     if service_id == 0x41:
         # [report_size] [0x41] [PID] [Data...]
         if report_size < 0x03:
-            return f'frm_malformed_01: report_size too small ({report_size:02X}) {_format_raw_data(data)}'
+            return f'{ecu} frm_short SID {service_id:02X} Raw {_format_raw_data(data)}'
         pid = data[2]
-        pid_data_length = report_size - 2
-        if len(data) < (3 + pid_data_length):
-            return f'frm_malformed_01: not enough data for PID {pid:02X} {_format_raw_data(data)}'
-        payload_bytes = data[3:3 + pid_data_length]
+        data_length = report_size - 2
+        if len(data) < (3 + data_length):
+            return f'{ecu} frm_short SID {service_id:02X} PID {pid:02X} Raw {_format_raw_data(data)}'
+        payload_bytes = data[3:3 + data_length]
         v = search_id_list(msg.arbitration_id & 0xFFF7, pid, PID_LIST)
         if v:
             (name, desc, decode_fn) = v
             value_str = decode_fn(payload_bytes)
             on_mode1(msg.arbitration_id, pid, name, desc, value_str)
-            return f"{name}: {value_str}"
+            return f"{ecu} PID {name} = {value_str}"
         # Unknown ECU, PID combination
-        return f"{msg.arbitration_id:04X} PID {pid:04X} Raw Data: {_format_raw_data(payload_bytes)}"
+        return f"{ecu} PID {pid:04X} Payload {_format_raw_data(payload_bytes)}"
 
     # --- Response to Mode 0x22 (UDS Read Data By Identifier - 0x62) ---
     elif service_id == 0x62:
         if report_size < 0x03:
-            return f'frm_malformed_22: report_size too small ({report_size:02X}) {_format_raw_data(data)}'
+            return f'{ecu} frm_short SID {service_id:02X} {_format_raw_data(data)}'
         did = (data[2] << 8) | data[3]
         did_data_length = report_size - 3
         if len(data) < (4 + did_data_length):
-            return f'frm_malformed_22: not enough data for DID {did:04X} {_format_raw_data(data)}'
+            return f'{ecu} frm_short SID {service_id:02X} DID {did:04X} Raw {_format_raw_data(data)}'
         payload_bytes = data[4:4 + did_data_length]
         v = search_id_list(msg.arbitration_id & 0xFFF7, did, DID_LIST)
         if v:
             (name, desc, decode_fn) = v
             value_str = decode_fn(payload_bytes)
             on_mode22(msg.arbitration_id, did, name, desc, value_str)
-            return f"{name}: {value_str}"
+            return f"{ecu} Read DID {name} = {value_str}"
         # Unknown ECU, DID combination
-        return f"{msg.arbitration_id:04X} DID {did:04X} Raw Data: {_format_raw_data(payload_bytes)}"
+        return f"{ecu} Read DID {did:04X} Payload {_format_raw_data(payload_bytes)}"
 
     # --- Unhandled Service ID ---
-    return f'frm_unhandled_sid {service_id:02X} {_format_raw_data(data)}'
+    return f'{ecu} SID {service_id:02X} Raw {_format_raw_data(data)}'
 
 class SummaryListener(can.Listener):
     """
