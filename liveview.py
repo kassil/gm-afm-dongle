@@ -233,6 +233,8 @@ def main(debug:bool, simulate:bool):
         traceback.print_exc()
         sys.exit(1)
     finally:
+        if notifier:
+            notifier.stop()  # Stop listener threads first
         if can_bus:
             can_bus.shutdown()
         click.echo("Liveview finished.", err=True)
