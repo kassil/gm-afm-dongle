@@ -16,16 +16,6 @@ STATE_FILE = Path("active_ids.json")
 
 # ------------------ DATA DEFINITIONS ------------------
 
-def decode_temp(msg: bytes) -> str:
-    return f"{20 + (msg[0] % 80):.1f} °C"
-
-def decode_percent(msg: bytes) -> str:
-    return f"{(msg[0] % 100):.1f} %"
-
-def decode_rpm(msg: bytes) -> str:
-    val = (msg[0] << 8) | msg[1]
-    return f"{val % 8000} rpm"
-
 def iter_all_signals() -> Iterator[Tuple[Tuple[int, int, int], Tuple[str, str, Callable[[my_uds.CanMsgData], str]]]]:
     """Yield all PID and DID entries with the proper service ID inserted."""
     # Mode 1 (Service 0x01) for OBD-II PIDs
@@ -36,8 +26,6 @@ def iter_all_signals() -> Iterator[Tuple[Tuple[int, int, int], Tuple[str, str, C
     for (ecu, did), info in my_uds.DID_LIST:
         yield ((ecu, 0x22, did), info)
 
-global master_list, value_cache
-master_list = list(iter_all_signals())
 value_cache = {}
 
 # ------------------ DRAW HELPERS ------------------
@@ -65,12 +53,30 @@ def draw_box(win, top:int, left:int, bottom:int, right:int) -> None:
     except curses.error:
         pass
 
+def iter_visible_rows(data_win, active_keys, scroll_offset, visit_row) -> bool:
+    # Assume view window is visible
+    h, w = data_win.getmaxyx()
+    top, bottom  = 1, h - 1
+    left, right = 0, w - 2
+    n_visible = bottom - top - 1
+    # This avoids building the full list in memory but still lets you scroll window
+    visible_rows = list(islice(
+        (item for item in iter_all_signals() if item[0] in active_keys),
+        scroll_offset,
+        scroll_offset + n_visible
+    ))
+    for i, entry in enumerate(visible_rows):
+        (e_can_id, e_sid, e_pid), (_, _, _) = entry
+        if visit_row(top+1+i, e_can_id, e_sid, e_pid):
+            return True # Stop searching
+    return False # Did not find a matching row
+
 # ------------------ RENDER FUNCTIONS ------------------
 
 def render_view(data_win, active_keys, scroll_offset):
     data_win.clear()
     h, w = data_win.getmaxyx()
-    title = "VIEW MODE  (↑↓ scroll, 'c'=configure, 'q'=quit)"
+    title = "VIEW MODE  (↑↓ scroll, 'c'=configure, 'q'=quit)" + f" ak:{len(active_keys)}"
     safe_addstr(data_win, 0, 0, title[: w - 1])
 
     top, bottom  = 1, h - 1
@@ -82,25 +88,20 @@ def render_view(data_win, active_keys, scroll_offset):
     safe_addstr(data_win, header_y, left + 2,
                 f"{'ECU':6} {'SID':4} {'PID':4} {'Label':15} {'Value':>15}")
 
-    n_visible = bottom - top - 1
-    active_list = [
-        (key, value) for key, value in iter_all_signals()
-        if key in active_keys
-    ]
-    # This avoids building the full list in memory but still lets you scroll window
-    visible_rows = list(islice(iter_all_signals(), scroll_offset, scroll_offset + n_visible))
-    row_y = top + 1
-    for (can_id, sid, pid), (label, descr, decode_fn) in visible_rows:
+    def draw_row(data_win, row, can_id, sid, pid):
         msg = bytes([random.randint(0, 255) for _ in range(2)])
-        value = value_cache.get((can_id & 0xFFF7, sid, pid), 'loading')
+        id_list = my_uds.PID_LIST if sid == 0x01 else my_uds.DID_LIST
+        (label, _, _) = my_uds.search_id_list(can_id, pid, id_list)
+        value = value_cache.get((can_id & 0xFFF7, sid, pid), 'loadin?g')
         safe_addstr(
             data_win,
-            row_y,
+            row,
             left + 2,
             f"{can_id:6X} {sid:3X} {pid:04X} {label[:15]:15} {value[:15]:>15}"
         )
-        row_y += 1
-
+        return False # Continue
+    iter_visible_rows(data_win, active_keys, scroll_offset, lambda row, can_id, sid, pid: \
+        draw_row(data_win, row, can_id, sid, pid))
     data_win.refresh()
 
 def render_configure(data_win, active_keys, selected, scroll_offset):
@@ -119,9 +120,10 @@ def render_configure(data_win, active_keys, selected, scroll_offset):
                 f"{' ':4} {'ECU':6} {'SID':4} {'PID':4} {'Label':15} {'Description'}")
 
     n_visible = bottom - top - 1
-    visible = master_list[scroll_offset: scroll_offset + n_visible]
+    # This avoids building the full list in memory but still lets you scroll window
+    visible_rows = list(islice(iter_all_signals(), scroll_offset, scroll_offset + n_visible))
     row_y = top + 1
-    for i, entry in enumerate(visible):
+    for i, entry in enumerate(visible_rows):
         (can_id, sid, pid), (label, desc, fn) = entry
         mark = "[X]" if (can_id, sid, pid) in active_keys else "[ ]"
         line = f"{mark:4} {can_id:6X} {sid:3X} {pid:04X} {label[:15]:15} {desc[:w - 45]}"
@@ -251,7 +253,7 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
     (data_win, log_win) = create_windows(stdscr)
 
     # Load persistent activation state
-    active_keys = load_active_flags(master_list)
+    active_keys = load_active_flags(list(iter_all_signals()))
 
     mode_configure = False
     selected = 0  # Cursor row
@@ -279,8 +281,16 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
                 selected = 0
                 scroll_offset = 0
             elif key in (curses.KEY_DOWN, ord('j')):
-                active = [e for e in master_list if e[-1]]
-                if scroll_offset + visible_rows < len(active):
+
+                top, bottom  = 1, h - 1
+                n_visible = bottom - top - 1
+                #visible_rows = list(islice(
+                #    (item for item in iter_all_signals() if item[0] in active_keys),
+                #    scroll_offset,
+                #    scroll_offset + n_visible
+                #))
+                # Stop cursor at bottom. Assumes that all keys are valid.
+                if scroll_offset + n_visible < len(active_keys):
                     scroll_offset += 1
                 draw_all = True
             elif key in (curses.KEY_UP, ord('k')):
@@ -309,36 +319,18 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
                         scroll_offset -= 1
                 draw_all = True
             elif key in (curses.KEY_DOWN, ord('j')):
-                if selected < len(master_list) - 1:
+                if selected < len(list(iter_all_signals())) - 1:
                     selected += 1
                     if selected - scroll_offset > visible_rows - 3:
                         scroll_offset += 1
                 draw_all = True
             elif key == ord(' '):
-                rowkey, rowval = master_list[selected]
+                rowkey, rowval = list(iter_all_signals())[selected]
                 if rowkey in active_keys:
                     active_keys.remove(rowkey)
                 else:
                     active_keys.add(rowkey)
                 draw_all = True
-
-        def iter_visible_rows(visit_row) -> bool:
-            # Assume view window is visible
-            h, w = data_win.getmaxyx()
-            top, bottom  = 1, h - 1
-            left, right = 0, w - 2
-            n_visible = bottom - top - 1
-            active_list = [
-                (key, value) for key, value in master_list
-                if key in active_keys
-            ]
-            # This avoids building the full list in memory but still lets you scroll window
-            visible_rows = list(islice(iter_all_signals(), scroll_offset, scroll_offset + n_visible))
-            for i, entry in enumerate(visible_rows):
-                (e_can_id, e_sid, e_pid), (_, _, _) = entry
-                if visit_row(top+1+i, e_can_id, e_sid, e_pid):
-                    return True # Stop searching
-            return False # Did not find a matching row
 
         def draw_row_value(arb_id:int, sid:int, pid:int, value:str, row:int, e_can_id:int, e_sid:int, e_pid:int) -> bool:
             if (arb_id & 0xFFF7, sid, pid) == (e_can_id & 0xFFF7, e_sid, e_pid):
@@ -350,7 +342,7 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
         def on_didpid(log_win, mode_configure:bool, arb_id:int, sid:int, pid:int, label:str, desc:str, value:str):
             # Draw if on screen
             if not mode_configure:
-                iter_visible_rows(lambda row, e_can_id, e_sid, e_pid: \
+                iter_visible_rows(data_win, active_keys, scroll_offset, lambda row, e_can_id, e_sid, e_pid: \
                     draw_row_value(arb_id, sid, pid, value, row, e_can_id, e_sid, e_pid))
             # Store it for rapid screen updates
             value_cache[(arb_id & 0xFFF7, sid, pid)] = value
@@ -365,7 +357,7 @@ def run_liveview_curses(stdscr, can_bus, msg_queue: queue.Queue):
         my_uds.send_tester_present(can_bus)
         if not mode_configure:
             # Request on-screen DIDs and PIDs
-            iter_visible_rows(request_row)
+            iter_visible_rows(data_win, active_keys, scroll_offset, request_row)
 
         # --- Process CAN Messages (from Queue) ---
         while not msg_queue.empty():
