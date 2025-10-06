@@ -359,6 +359,9 @@ def framing(msg: can.Message, on_mode1, on_mode22) -> str:
     if not data:
         return 'frm_empty'  # No bytes received!
 
+    if msg.arbitration_id not in (0x7E8, 0x7E9):
+        return f"ECU:{decode_ecu(msg.arbitration_id)} {_format_raw_data(data)}"
+
     # A single-frame response must have at least 3 bytes:
     # [report_size] [Service ID] [PID/DID_MSB]
     if len(data) < 3:
@@ -370,8 +373,8 @@ def framing(msg: can.Message, on_mode1, on_mode22) -> str:
     # Check if the actual message length matches the reported size
     # report_size specifies the number of bytes *after* itself.
     # So, actual_expected_len = report_size + 1
-    if len(data) != (report_size + 1):
-        return f'frm_mismatch report:{report_size:02X} act:{len(data)} {_format_raw_data(data)}'
+    if len(data) < (report_size + 1):
+        return f'frm_mismatch report:{report_size} act:{len(data)} {_format_raw_data(data)}'
 
     # --- Response to Mode 0x01 (0x41) ---
     if service_id == 0x41:
