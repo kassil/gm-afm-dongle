@@ -81,7 +81,7 @@ def render_view(data_win, active_keys, scroll_offset):
     safe_addstr(data_win, 0, 0, title[: w - 1])
 
     top, bottom  = 1, h - 1
-    left, right = 0, w - 2
+    left, right = 0, w - 1
     draw_box(data_win, top, left, bottom, right)
 
     # Column headers over the top line of box
@@ -413,18 +413,18 @@ def create_windows(stdscr):
     """Create two stacked windows that fill the terminal."""
     h, w = stdscr.getmaxyx()
     # Ensure we have at least some minimum space
-    if h < 4 or w < 30:
+    if h < 4 or w < 40:
         raise ValueError('Your screen is too small')
 
-    # split roughly in half. Give top the extra row if odd.
-    top_h = (h - 1) // 2
-    bottom_h = (h - 1) - top_h
+    # split roughly in half. Give first the extra row if odd.
+    left_w = (w - 1) // 2
+    right_w = (w - 1) - left_w
 
-    data_win = curses.newwin(top_h, w, 0, 0)
+    data_win = curses.newwin(h, left_w, 0, 0)
     data_win.nodelay(False)
     data_win.timeout(200)
     data_win.keypad(True)
-    log_win = curses.newwin(bottom_h, w, top_h, 0)
+    log_win = curses.newwin(h, right_w, 0, left_w)
     log_win.scrollok(True)
     return data_win, log_win    
 
